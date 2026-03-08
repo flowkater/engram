@@ -26,6 +26,24 @@ export interface WatcherInstance {
 
 const IGNORED_DIRS = [".obsidian", ".trash", "assets", "images", "node_modules", ".git"];
 
+/** Simple semaphore to limit concurrent indexing operations. */
+class Semaphore {
+  private current = 0;
+  private queue: Array<() => void> = [];
+  constructor(private max: number) {}
+  async acquire(): Promise<void> {
+    if (this.current < this.max) { this.current++; return; }
+    return new Promise<void>((resolve) => this.queue.push(() => { this.current++; resolve(); }));
+  }
+  release(): void {
+    this.current--;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+
+const indexSemaphore = new Semaphore(3);
+
 /**
  * Check if a path should be ignored.
  */
@@ -49,6 +67,7 @@ export function startWatcher(
   const watcher = watch(vaultPath, {
     persistent: true,
     ignoreInitial: true,
+    followSymlinks: false,
     ignored: (filePath: string) => {
       const rel = path.relative(vaultPath, filePath);
       if (rel === "") return false; // Don't ignore root
@@ -72,6 +91,7 @@ export function startWatcher(
       relativePath,
       setTimeout(async () => {
         debounceTimers.delete(relativePath);
+        await indexSemaphore.acquire();
         try {
           const result = await indexFile(db, absPath, relativePath, {
             source,
@@ -82,6 +102,8 @@ export function startWatcher(
           }
         } catch (err) {
           opts.onError?.(err as Error);
+        } finally {
+          indexSemaphore.release();
         }
       }, debounceMs)
     );

@@ -102,7 +102,62 @@ export function startScheduler(
   });
   tasks.push(pruneTask);
 
-  log("Scheduler started (reindex: every 6h, prune: weekly Sun 3AM)");
+  // Daily 2 AM: rotate logs older than 7 days
+  const logRotateTask = cron.schedule("0 2 * * *", () => {
+    log("Starting log rotation...");
+    const logDir = path.join(
+      (process.env.HOME || "~"),
+      ".unified-memory",
+      "logs"
+    );
+    if (fs.existsSync(logDir)) {
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      try {
+        for (const entry of fs.readdirSync(logDir)) {
+          const filePath = path.join(logDir, entry);
+          const stat = fs.statSync(filePath);
+          if (stat.isFile() && stat.mtimeMs < cutoff) {
+            fs.unlinkSync(filePath);
+            log(`Deleted old log: ${entry}`);
+          }
+        }
+      } catch (err) {
+        log(`Log rotation error: ${(err as Error).message}`);
+      }
+    }
+    log("Log rotation complete");
+  });
+  tasks.push(logRotateTask);
+
+  // Daily 4 AM: backup SQLite database
+  const backupTask = cron.schedule("0 4 * * *", () => {
+    log("Starting DB backup...");
+    const homeDir = process.env.HOME || "~";
+    const backupDir = path.join(homeDir, ".unified-memory", "backups");
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    const backupPath = path.join(backupDir, `memory-${date}.db`);
+    try {
+      db.backup(backupPath);
+      log(`DB backup saved: ${backupPath}`);
+      // Clean backups older than 7 days
+      for (const entry of fs.readdirSync(backupDir)) {
+        const fp = path.join(backupDir, entry);
+        const stat = fs.statSync(fp);
+        if (stat.isFile() && stat.mtimeMs < Date.now() - 7 * 24 * 60 * 60 * 1000) {
+          fs.unlinkSync(fp);
+          log(`Deleted old backup: ${entry}`);
+        }
+      }
+    } catch (err) {
+      log(`DB backup error: ${(err as Error).message}`);
+    }
+  });
+  tasks.push(backupTask);
+
+  log("Scheduler started (reindex: every 6h, prune: weekly Sun 3AM, log-rotate: daily 2AM, backup: daily 4AM)");
 
   return {
     tasks,

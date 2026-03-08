@@ -40,19 +40,19 @@ describe("scheduler", () => {
       onLog: (msg) => logs.push(msg),
     });
 
-    expect(scheduler.tasks).toHaveLength(2);
+    expect(scheduler.tasks).toHaveLength(4);
     expect(logs.some((l) => l.includes("Scheduler started"))).toBe(true);
 
     scheduler.stop();
     expect(logs.some((l) => l.includes("Scheduler stopped"))).toBe(true);
   });
 
-  it("creates two scheduled tasks", () => {
+  it("creates four scheduled tasks (reindex, prune, log-rotate, backup)", () => {
     const scheduler = startScheduler(inst.db, {
       onLog: () => {},
     });
 
-    expect(scheduler.tasks).toHaveLength(2);
+    expect(scheduler.tasks).toHaveLength(4);
 
     scheduler.stop();
   });

@@ -2,10 +2,11 @@
  * Markdown chunker — splits markdown files into chunks for embedding.
  * - H2 (##) heading-based splitting
  * - Code blocks kept intact (never split mid-block)
- * - Frontmatter (YAML) extracted as metadata
+ * - Frontmatter (YAML) extracted as metadata (via gray-matter)
  * - Small sections (<500 tokens) merged with next section
  * - Wiki links [[...]] preserved
  */
+import matter from "gray-matter";
 
 export interface ChunkOptions {
   maxTokens: number;
@@ -36,54 +37,45 @@ export const MEMORY_MD_CHUNK_OPTS: ChunkOptions = { maxTokens: 256, overlap: 0 }
  * Rough token count estimation (~4 chars per token for mixed content).
  */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  // Korean characters (Hangul syllables + Jamo) use ~2 chars/token vs ~4 for Latin
+  const koreanCount = (text.match(/[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/g) || []).length;
+  const otherCount = text.length - koreanCount;
+  return Math.ceil(koreanCount / 2 + otherCount / 4);
 }
 
 /**
- * Parse YAML frontmatter from markdown content.
+ * Parse YAML frontmatter from markdown content using gray-matter.
  * Returns the extracted metadata and the content without frontmatter.
  */
 export function parseFrontmatter(content: string): { meta: ChunkMeta; body: string } {
-  const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-  if (!fmMatch) {
-    return { meta: {}, body: content };
-  }
-
+  const parsed = matter(content);
+  const data = parsed.data as Record<string, unknown>;
   const meta: ChunkMeta = {};
-  const yamlBlock = fmMatch[1];
-  const body = content.slice(fmMatch[0].length);
 
-  // Simple YAML parsing for common fields
-  for (const line of yamlBlock.split("\n")) {
-    const tagMatch = line.match(/^tags:\s*\[(.*)\]/);
-    if (tagMatch) {
-      meta.tags = tagMatch[1].split(",").map((t) => t.trim().replace(/^["']|["']$/g, ""));
-      continue;
-    }
-    const tagListMatch = line.match(/^tags:\s*$/);
-    if (tagListMatch) {
-      // Multi-line tags list — collect in next lines
-      continue;
-    }
-    const tagItemMatch = line.match(/^\s*-\s+(.+)/);
-    if (tagItemMatch && !meta.tags) {
-      meta.tags = meta.tags || [];
-    }
-    if (tagItemMatch && yamlBlock.includes("tags:")) {
-      meta.tags = meta.tags || [];
-      meta.tags.push(tagItemMatch[1].trim().replace(/^["']|["']$/g, "").replace(/^#/, ""));
-    }
-    const scopeMatch = line.match(/^scope:\s*(.+)/);
-    if (scopeMatch) {
-      meta.scope = scopeMatch[1].trim();
-    }
-    const titleMatch = line.match(/^title:\s*(.+)/);
-    if (titleMatch) {
-      meta.title = titleMatch[1].trim().replace(/^["']|["']$/g, "");
+  // Extract tags (supports inline array, multi-line list, and #-prefixed)
+  if (Array.isArray(data.tags)) {
+    meta.tags = data.tags.map((t: unknown) =>
+      String(t).trim().replace(/^#/, "")
+    );
+  } else if (typeof data.tags === "string") {
+    meta.tags = [data.tags.trim().replace(/^#/, "")];
+  }
+
+  if (typeof data.scope === "string") {
+    meta.scope = data.scope.trim();
+  }
+  if (typeof data.title === "string") {
+    meta.title = data.title.trim();
+  }
+
+  // Preserve any other frontmatter fields
+  for (const [key, value] of Object.entries(data)) {
+    if (!["tags", "scope", "title"].includes(key)) {
+      meta[key] = value;
     }
   }
 
-  return { meta, body };
+  return { meta, body: parsed.content };
 }
 
 /**

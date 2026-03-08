@@ -60,10 +60,10 @@ export class SessionTracker {
 
     // Method B: stdin close (primary for stdio transport)
     process.stdin.on("end", () => {
-      this.flush();
+      void this.flush();
     });
     process.stdin.on("close", () => {
-      this.flush();
+      void this.flush();
     });
   }
 
@@ -74,7 +74,7 @@ export class SessionTracker {
     if (!this.session) {
       this.session = {
         sessionId: uuidv7(),
-        agent: "unknown",
+        agent: process.env.MCP_AGENT || process.env.USER || "unknown",
         startedAt: now,
         lastActivityAt: now,
         activities: [],
@@ -214,8 +214,9 @@ export function buildSummaryText(session: SessionData): string {
   const addCount = (toolCounts["memory.add"] || 0) + (toolCounts["memory.ingest"] || 0);
 
   const parts: string[] = [];
+  const agentLabel = session.agent === "unknown" ? "unnamed-agent" : session.agent;
   parts.push(
-    `[Auto] ${session.agent} session in scope '${scope}'.`
+    `[Auto] ${agentLabel} session in scope '${scope}'.`
   );
   parts.push(
     `${searchCount} searches, ${addCount} saves, ${session.activities.length} total actions.`
@@ -229,6 +230,16 @@ export function buildSummaryText(session: SessionData): string {
   if (addContents.length > 0) {
     const topContents = addContents.slice(-3).join("; ");
     parts.push(`Saved: ${topContents}.`);
+  }
+
+  // Extract unique keywords from all activities for better retrieval
+  const keywords = new Set<string>();
+  for (const act of session.activities) {
+    const words = act.detail.split(/\s+/).filter((w) => w.length > 2);
+    for (const w of words.slice(0, 5)) keywords.add(w.toLowerCase());
+  }
+  if (keywords.size > 0) {
+    parts.push(`Keywords: ${[...keywords].slice(0, 10).join(", ")}.`);
   }
 
   return parts.join(" ");

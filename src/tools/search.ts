@@ -41,15 +41,33 @@ export async function memorySearch(
   // Generate query embedding
   const queryEmbedding = await embed(params.query, embedOpts);
 
-  // 1. Vector search (cosine similarity via sqlite-vec)
-  const vecResults = db
+  // Build scope/source/agent filter conditions for SQL
+  const filterConditions: string[] = ["m.deleted = 0"];
+  const filterParams: unknown[] = [];
+  if (params.scope) {
+    filterConditions.push("m.scope = ?");
+    filterParams.push(params.scope);
+  }
+  if (params.source) {
+    filterConditions.push("m.source = ?");
+    filterParams.push(params.source);
+  }
+  if (params.agent) {
+    filterConditions.push("m.agent = ?");
+    filterParams.push(params.agent);
+  }
+  const whereClause = filterConditions.join(" AND ");
+
+  // 1. Vector search — sqlite-vec requires k=? in WHERE, no external LIMIT
+  //    Filters applied post-hoc since sqlite-vec KNN doesn't support JOINs in WHERE
+  const vecRaw = db
     .prepare(
       `
       SELECT id, distance
       FROM memory_vec
       WHERE embedding MATCH ?
+        AND k = ?
       ORDER BY distance
-      LIMIT ?
     `
     )
     .all(Buffer.from(queryEmbedding.buffer), fetchLimit) as Array<{
@@ -57,10 +75,25 @@ export async function memorySearch(
     distance: number;
   }>;
 
-  // 2. FTS5 keyword search
+  // Post-filter vec results by scope/source/agent/deleted via a lookup
+  let vecResults = vecRaw;
+  if (filterParams.length > 0 || true /* always filter deleted */) {
+    const vecIds = vecRaw.map((r) => r.id);
+    if (vecIds.length > 0) {
+      const ph = vecIds.map(() => "?").join(",");
+      const validIds = new Set(
+        (db.prepare(
+          `SELECT id FROM memories WHERE id IN (${ph}) AND ${whereClause}`
+        ).all(...vecIds, ...filterParams) as Array<{ id: string }>).map((r) => r.id)
+      );
+      vecResults = vecRaw.filter((r) => validIds.has(r.id));
+    }
+  }
+
+  // 2. FTS5 keyword search with scope/source/agent filter
   let ftsResults: Array<{ id: string; rank: number }> = [];
   try {
-    ftsResults = db
+    const ftsRaw = db
       .prepare(
         `
         SELECT id, rank
@@ -74,6 +107,20 @@ export async function memorySearch(
       id: string;
       rank: number;
     }>;
+
+    // Post-filter by scope/source/agent/deleted
+    if (ftsRaw.length > 0 && (filterParams.length > 0 || true)) {
+      const ftsIds = ftsRaw.map((r) => r.id);
+      const ph = ftsIds.map(() => "?").join(",");
+      const validIds = new Set(
+        (db.prepare(
+          `SELECT id FROM memories WHERE id IN (${ph}) AND ${whereClause}`
+        ).all(...ftsIds, ...filterParams) as Array<{ id: string }>).map((r) => r.id)
+      );
+      ftsResults = ftsRaw.filter((r) => validIds.has(r.id));
+    } else {
+      ftsResults = ftsRaw;
+    }
   } catch {
     // FTS query might fail on special characters; fall back to vec only
   }
@@ -125,13 +172,8 @@ export async function memorySearch(
     ).run(now, ...ids);
   }
 
-  // Apply scope/source/agent filters and sort by RRF score
+  // Sort by RRF score (scope/source/agent already filtered in SQL)
   return rows
-    .filter((r) => {
-      if (params.scope && r.scope !== params.scope) return false;
-      if (params.source && r.source !== params.source) return false;
-      return true;
-    })
     .map((r) => ({
       ...r,
       tags: JSON.parse(r.tags) as string[],
@@ -149,5 +191,5 @@ function escapeFtsQuery(query: string): string {
     .split(/\s+/)
     .filter((w) => w.length > 0)
     .map((w) => `"${w.replace(/"/g, '""')}"`)
-    .join(" OR ");
+    .join(" AND ");
 }
