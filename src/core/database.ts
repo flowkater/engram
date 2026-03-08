@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   summary TEXT,
   memory_ids TEXT DEFAULT '[]'
 );
+
+-- File-level checkpoints for diffScan
+CREATE TABLE IF NOT EXISTS file_checkpoints (
+  source_path TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  file_mtime_ms INTEGER NOT NULL,
+  indexed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_source ON file_checkpoints(source);
 `;
 
 /** Initialize the vector virtual table (sqlite-vec). */

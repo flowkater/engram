@@ -28,8 +28,9 @@ export interface WatcherInstance {
 const IGNORED_DIRS = [".obsidian", ".trash", "assets", "images", "node_modules", ".git"];
 
 /**
- * Diff scan — find files modified since last indexing and re-index them.
- * Called before starting the watcher to catch changes that happened while offline.
+ * Diff scan — file-level checkpoint-based change detection.
+ * Compares file mtime against stored checkpoints to find modified files.
+ * Race condition safe: only records checkpoint if mtime hasn't changed during indexing.
  */
 export async function diffScan(
   db: Database.Database,
@@ -43,13 +44,6 @@ export async function diffScan(
 ): Promise<{ scanned: number; indexed: number }> {
   const source = opts?.source || "obsidian";
   const resolvedVault = path.resolve(vaultPath);
-
-  // Get last indexing time for this source
-  const row = db.prepare(
-    "SELECT MAX(updated_at) as t FROM memories WHERE source = ?"
-  ).get(source) as { t: string | null } | undefined;
-
-  const lastIndexedAt = row?.t ? new Date(row.t) : null;
 
   // Walk vault for .md files
   const mdFiles: string[] = [];
@@ -66,27 +60,77 @@ export async function diffScan(
   }
   walk(resolvedVault);
 
+  // Build set of current vault files (absolute paths)
+  const currentFiles = new Set(mdFiles.map((f) => path.resolve(f)));
+
+  // Prepared statements
+  const getCheckpoint = db.prepare(
+    "SELECT file_mtime_ms FROM file_checkpoints WHERE source_path = ?"
+  );
+  const upsertCheckpoint = db.prepare(
+    "INSERT OR REPLACE INTO file_checkpoints (source_path, source, file_mtime_ms, indexed_at) VALUES (?, ?, ?, ?)"
+  );
+  const deleteCheckpoint = db.prepare(
+    "DELETE FROM file_checkpoints WHERE source_path = ?"
+  );
+
   let scanned = 0;
   let indexed = 0;
 
+  // Index new/modified files
   for (const absPath of mdFiles) {
     scanned++;
     try {
       const stat = fs.statSync(absPath);
-      // If no last indexed time, skip (full ingest should be used instead)
-      if (lastIndexedAt && stat.mtimeMs > lastIndexedAt.getTime()) {
-        const relativePath = path.relative(resolvedVault, absPath);
-        const result = await indexFile(db, absPath, absPath, {
-          source,
-          embedOpts: opts?.embedOpts,
-        });
-        if (!result.skipped) {
-          indexed++;
-          opts?.onIndexed?.(relativePath, result.chunks);
-        }
+      const mtimeBefore = stat.mtimeMs;
+
+      // Check checkpoint
+      const cp = getCheckpoint.get(absPath) as { file_mtime_ms: number } | undefined;
+
+      if (cp && cp.file_mtime_ms >= mtimeBefore) {
+        // File not modified since last checkpoint — skip
+        continue;
       }
+
+      // File is new or modified — index it
+      const relativePath = path.relative(resolvedVault, absPath);
+      const result = await indexFile(db, absPath, absPath, {
+        source,
+        embedOpts: opts?.embedOpts,
+      });
+
+      if (!result.skipped) {
+        indexed++;
+        opts?.onIndexed?.(relativePath, result.chunks);
+      }
+
+      // Race condition check: verify file wasn't modified during indexing
+      const statAfter = fs.statSync(absPath);
+      const mtimeAfter = statAfter.mtimeMs;
+
+      if (mtimeBefore === mtimeAfter) {
+        // Safe to record checkpoint
+        upsertCheckpoint.run(absPath, source, mtimeBefore, new Date().toISOString());
+      }
+      // If mtime changed during indexing, skip checkpoint — next scan will re-process
     } catch (err) {
       opts?.onError?.(err as Error);
+    }
+  }
+
+  // Handle deleted files: checkpoints that no longer have files in vault
+  const allCheckpoints = db.prepare(
+    "SELECT source_path FROM file_checkpoints WHERE source = ?"
+  ).all(source) as Array<{ source_path: string }>;
+
+  for (const cp of allCheckpoints) {
+    if (!currentFiles.has(cp.source_path)) {
+      try {
+        softDeleteByPath(db, cp.source_path);
+        deleteCheckpoint.run(cp.source_path);
+      } catch (err) {
+        opts?.onError?.(err as Error);
+      }
     }
   }
 
