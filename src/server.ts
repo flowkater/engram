@@ -9,7 +9,6 @@ import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs";
 import { openDatabase } from "./core/database.js";
-import { getCurrentModelName } from "./core/embedder.js";
 import { memoryAdd } from "./tools/add.js";
 import { memorySearch } from "./tools/search.js";
 import { memoryContext } from "./tools/context.js";
@@ -57,16 +56,14 @@ try {
 }
 const db = dbInstance.db;
 
-// Check for embedding model mismatch
+// Check for embedding model mismatch using DB records
 {
-  const currentModel = getCurrentModelName();
   const existing = db.prepare(
     "SELECT DISTINCT embed_model FROM memories WHERE embed_model IS NOT NULL AND deleted = 0 LIMIT 10"
   ).all() as Array<{ embed_model: string }>;
-  const mismatched = existing.filter((r) => r.embed_model !== currentModel);
-  if (mismatched.length > 0) {
-    const models = mismatched.map((r) => r.embed_model).join(", ");
-    log(`⚠️  Embedding model mismatch detected! Current: ${currentModel}, existing records use: ${models}. Consider re-indexing for consistent similarity search.`);
+  if (existing.length > 1) {
+    const models = existing.map((r) => r.embed_model).join(", ");
+    log(`⚠️  Multiple embedding models detected in DB: ${models}. Consider re-indexing for consistent similarity search.`);
   }
 }
 
