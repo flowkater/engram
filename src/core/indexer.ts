@@ -122,17 +122,24 @@ export async function indexFile(
   const chunkIds: string[] = [];
 
   // Pre-compute embeddings outside transaction (network I/O)
-  const embeddings: Float32Array[] = [];
+  // Skip chunks that fail embedding (e.g. Ollama YAML parse errors on certain content)
+  const embeddings: (Float32Array | null)[] = [];
   for (const chunk of chunks) {
-    const embedding = await embed(chunk.text, opts.embedOpts);
-    embeddings.push(embedding);
+    try {
+      const embedding = await embed(chunk.text, opts.embedOpts);
+      embeddings.push(embedding);
+    } catch (err) {
+      console.warn(`[indexer] Skipping chunk ${chunk.index} of ${relativePath}: ${(err as Error).message}`);
+      embeddings.push(null);
+    }
   }
 
-  // Atomic insert of all chunks
+  // Atomic insert of all chunks (skip failed embeddings)
   db.transaction(() => {
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
       const embedding = embeddings[ci];
+      if (!embedding) continue; // skip chunks with failed embeddings
       const id = uuidv7();
       const now = new Date().toISOString();
       const tags = JSON.stringify(chunk.meta.tags || []);

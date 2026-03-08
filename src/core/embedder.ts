@@ -27,8 +27,12 @@ export interface EmbedResult {
 export async function embed(text: string, opts?: EmbedderOptions): Promise<Float32Array>;
 export async function embed(text: string, opts: EmbedderOptions | undefined, withModel: true): Promise<EmbedResult>;
 export async function embed(text: string, opts?: EmbedderOptions, withModel?: true): Promise<Float32Array | EmbedResult> {
-  // Sanitize: strip YAML frontmatter delimiters that cause Ollama YAML parsing errors
-  const sanitized = text.replace(/^---\s*\n/gm, "").replace(/\n---\s*$/gm, "");
+  // Sanitize: Ollama's nomic-embed-text can trigger YAML parsing on prompt text.
+  // Strip frontmatter blocks entirely and normalize problematic patterns.
+  const sanitized = text
+    .replace(/^---\s*\n[\s\S]*?\n---\s*\n?/m, "") // strip full frontmatter block
+    .replace(/^---\s*\n/gm, "")                    // stray delimiters
+    .replace(/\n---\s*$/gm, "");
   // Truncate to stay within nomic-embed-text context limit (8192 tokens)
   const truncatedText = sanitized.length > MAX_EMBED_CHARS ? sanitized.slice(0, MAX_EMBED_CHARS) : sanitized;
   const baseUrl = opts?.ollamaBaseUrl || OLLAMA_BASE_URL;
