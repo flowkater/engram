@@ -1,95 +1,96 @@
-# CLAUDE.md — Engram MCP Server
+# CLAUDE.md — Engram Phase 0: 신뢰 회복
 
 ## 프로젝트 개요
-로컬 AI 에이전트 공유 메모리 MCP 서버. Ollama + SQLite 기반, 100% 로컬.
+Engram: 로컬 AI 에이전트 메모리 MCP 서버. SQLite + sqlite-vec + FTS5 + Ollama.
 
 ## 기술 스택
-- **Runtime**: Node.js 22+, TypeScript, ESM
-- **DB**: SQLite + sqlite-vec (코사인 유사도) + FTS5 (전문 검색) + memory_tags (정규화)
-- **Embedding**: Ollama nomic-embed-text (768차원), OpenAI fallback
-- **빌드**: tsup (번들러), vitest (테스트)
-- **MCP SDK**: `@modelcontextprotocol/sdk` (stdio transport)
-- **주요 의존성**: gray-matter (프론트매터), p-limit (동시성), zod (스키마), chokidar (파일감시)
+- Node.js 22+ / TypeScript 5
+- better-sqlite3 + sqlite-vec + FTS5
+- Ollama nomic-embed-text (768-dim)
+- MCP SDK (@modelcontextprotocol/sdk)
+- Vitest
 
-## 빌드 & 테스트
+## 테스트
 ```bash
-npm install          # 의존성 설치
-npm run build        # tsup → dist/
-npm test             # vitest 전체 (108 tests)
-npm run test:watch   # 워치 모드
-npm run dev          # tsx 개발 서버
+npm test          # Vitest 실행 (현재 108 tests, 18 files)
+npx tsc --noEmit  # 타입 체크
+npm run build     # 빌드
 ```
 
-## 프로젝트 구조
+## 개발 방법론
+- **TDD (Red→Green→Refactor)**
+- Feature 단위 커밋 (fix: ..., refactor: ..., docs: ...)
+- 각 작업 완료 시 `npm test` 통과 확인 후 git commit
+
+---
+
+## 작업 목록 (순서대로)
+
+### Task 0-1: strict local-only 기본값
+
+현재 문제: `src/core/embedder.ts`에서 Ollama 실패 시 OPENAI_API_KEY가 있으면 자동으로 OpenAI로 fallback. README는 "100% local, privacy-first"라고 명시. 모순.
+
+수정:
+1. `embedder.ts`에 `STRICT_LOCAL` 모드 추가 (기본값: `true`)
+   - 환경변수 `ENGRAM_STRICT_LOCAL` (기본 "true")
+   - strict local 모드에서는 OpenAI fallback 하지 않음. Ollama 실패 시 그대로 throw
+   - `ENGRAM_STRICT_LOCAL=false`로 명시적 opt-in해야 OpenAI fallback 활성화
+2. `embed()` 함수에서 strict local 체크 추가
+3. `README.md` Environment Variables에 `ENGRAM_STRICT_LOCAL` 추가
+4. 테스트 추가:
+   - strict local 모드에서 Ollama 실패 시 OpenAI fallback 안 하고 throw
+   - strict local false 시 기존처럼 fallback 동작
+
+DoD: strict local 기본값 + 테스트 통과 + README 반영
+
+### Task 0-2: embed_model provenance 수정
+
+현재 문제: `getCurrentModelName()`은 항상 `ollama/<model>`을 반환. OpenAI fallback이 실제로 일어나도 DB에는 Ollama로 기록됨. 이건 재인덱싱 판단과 데이터 정합성에 치명적.
+
+수정:
+1. `embed()` 함수의 `withModel: true` 오버로드를 **기본 경로로** 활용
+   - `add.ts`, `summary.ts`, `restore.ts`, `ingest.ts`에서 embed 호출 시 `withModel: true` 사용
+   - 반환된 `EmbedResult.model`을 `embed_model`에 저장
+2. `getCurrentModelName()` 의존 제거 — 실제 호출 결과의 model을 사용
+3. `getCurrentModelName()`은 deprecated 마크 (health check의 model mismatch 감지용으로만 유지)
+4. 테스트: embed가 OpenAI fallback 했을 때 "openai/text-embedding-3-small" 반환 확인
+
+DoD: embed_model이 실제 사용 모델 기록 + 기존 108 테스트 통과
+
+### Task 0-3: source_path 정규화
+
+현재 문제: 단일 파일 ingest에서 `source_path`에 basename만 저장. 서로 다른 디렉토리의 같은 파일명 충돌 가능.
+
+수정:
+1. `src/tools/ingest.ts` 확인 — source_path 저장 로직
+2. 단일 파일: basename → **상대 경로** (VAULT_PATH 기준) 또는 **절대 경로**
+3. 디렉토리 인덱싱(`indexer.ts`): 이미 상대 경로 사용하는지 확인, 아니면 수정
+4. 기존 데이터와의 호환성: 마이그레이션은 불필요 (새 ingest부터 적용)
+5. 테스트: 같은 basename, 다른 경로의 파일 2개 ingest → 충돌 없이 별도 저장
+
+DoD: source_path가 최소 상대 경로 + 테스트 통과
+
+### Task 0-4: README/주석 drift 정리
+
+현재 문제:
+- README Quick Start: "81 tests expected" → 실제 108개
+- server.ts 상단 주석: "8 MCP tools" → 실제 10개
+- `memory.ingest`의 `recursive` 파라미터가 스키마에 있지만 실제 미사용
+- AGENTS.md의 scope 외부화 명세 vs scope.ts 하드코딩
+
+수정:
+1. README: "81 tests" → "108 tests" 수정
+2. server.ts 상단 주석 확인 및 10 tools로 수정 (있으면)
+3. `ingest` tool 스키마에서 `recursive` 파라미터: 구현하거나 제거 (구현이 복잡하면 제거)
+4. `AGENTS.md`가 있으면 scope 관련 명세 현실화
+5. 기타 코드 내 주석에서 발견되는 숫자 불일치 수정
+
+DoD: README/주석/스키마가 실제 코드와 100% 일치
+
+---
+
+## 완료 시 알림
+전체 작업 완료 후 반드시 실행:
+```bash
+openclaw system event --text "Done: Engram Phase 0 — trust recovery complete" --mode now
 ```
-src/
-├── server.ts              # MCP 서버 진입점 (stdio transport, 10 tools 등록)
-├── cli.ts                 # CLI 진입점 (index/stats/prune)
-├── core/
-│   ├── database.ts        # SQLite + sqlite-vec + FTS5 + memory_tags 스키마
-│   ├── embedder.ts        # Ollama/OpenAI 임베딩 (768d, 30s timeout, 1회 재시도)
-│   ├── chunker.ts         # gray-matter 프론트매터 + H2 분할 + 한국어 토큰 보정
-│   ├── indexer.ts         # 배치 인덱싱 (hash 스킵, pLimit(3) 동시성 제한, 트랜잭션)
-│   ├── watcher.ts         # chokidar 감시 (Semaphore(3), diffScan, followSymlinks:false)
-│   ├── scheduler.ts       # node-cron (6h reindex, weekly prune, daily 로그rotation/백업)
-│   └── session-tracker.ts # stdin close + idle timeout 자동 세션 추적 + 실패 시 덤프
-├── tools/
-│   ├── add.ts             # memory.add — 메모리 저장 + 임베딩 (트랜잭션)
-│   ├── search.ts          # memory.search — 하이브리드 검색 (adaptive fetch, AND 기본)
-│   ├── context.ts         # memory.context — 가중 스코어 정렬 (importance*0.4 + recency*0.6)
-│   ├── summary.ts         # memory.summary — 세션 요약 저장 (트랜잭션)
-│   ├── ingest.ts          # memory.ingest — 파일/디렉토리 인덱싱
-│   ├── prune.ts           # memory.prune — 오래된 메모리 정리 (FTS/vec/tags 동기 삭제)
-│   ├── stats.ts           # memory.stats — 통계 조회
-│   ├── graph.ts           # memory.graph — 태그 정규화 테이블 + UNION dedup
-│   ├── health.ts          # memory.health — DB 정합성 검사 (고아 레코드, 모델 불일치)
-│   └── restore.ts         # memory.restore — soft-deleted 메모리 복원 + 재임베딩
-└── utils/
-    ├── hash.ts            # SHA-256 content hash
-    ├── rrf.ts             # Reciprocal Rank Fusion 병합
-    ├── scope.ts           # config.json 기반 스코프 매핑 (외부화, graceful fallback)
-    ├── tags.ts            # 태그 파싱 + memory_tags 테이블 CRUD
-    └── delete-related.ts  # FTS/vec/tags/links 공통 삭제 헬퍼 (DRY)
-```
-
-## 핵심 규칙
-- **테스트 필수**: 모든 변경은 `npm test` 통과 확인 후 커밋 (현재 108 tests)
-- **ESM only**: `import/export` 사용, `.js` 확장자 임포트 (`./core/database.js`)
-- **트랜잭션 필수**: memories + vec + fts + tags 다중 테이블 쓰기는 반드시 `db.transaction()` 래핑
-- **환경변수**: `MEMORY_DB`, `VAULT_PATH`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`
-- **DB 마이그레이션**: `database.ts`의 `openDatabase()` 내 CREATE IF NOT EXISTS + ALTER TABLE 패턴
-- **임베딩 차원**: 768 고정. embed_model 컬럼으로 모델 변경 감지
-- **동시성 제한**: indexer pLimit(3), watcher Semaphore(3) — Ollama 과부하 방지
-- **scope 설정**: `~/.engram/config.json`에서 외부화 (변경 시 서버 재시작 필요)
-
-## MCP Tools (10개)
-| Tool | 입력 | 설명 |
-|------|------|------|
-| `memory.add` | content, source?, scope?, tags? | 메모리 저장 + 벡터 임베딩 |
-| `memory.search` | query, scope?, limit?, source? | 시맨틱+키워드 하이브리드 검색 (adaptive fetch) |
-| `memory.context` | cwd?, scope? | cwd 기반 자동 컨텍스트 로드 (가중 스코어) |
-| `memory.summary` | summary, sessionId?, scope? | 세션 요약 저장 |
-| `memory.ingest` | path, source?, scope? | 파일/디렉토리 인덱싱 |
-| `memory.prune` | days?, scope?, limit?, execute? | 오래된 메모리 정리 (기본 dry-run) |
-| `memory.stats` | scope? | DB 통계 |
-| `memory.graph` | query, hops?, limit? | 그래프 관계 탐색 (UNION dedup) |
-| `memory.health` | — | DB 정합성 검사 (고아 레코드, 모델 불일치, 링크 무결성) |
-| `memory.restore` | id | soft-deleted 메모리 복원 + 재임베딩 |
-
-## DB 테이블
-| 테이블 | 용도 |
-|--------|------|
-| `memories` | 메인 메모리 (content, scope, tags, embed_model, deleted 등) |
-| `memory_vec` | sqlite-vec 벡터 인덱스 (float[768]) |
-| `memory_fts` | FTS5 전문 검색 인덱스 |
-| `memory_tags` | 태그 정규화 테이블 (memory_id, tag) |
-| `memory_links` | 그래프 레이어 (from_id, to_id, link_type, weight) |
-
-## 테스트 패턴
-- 유닛: 각 모듈별 `.test.ts` 공존 (co-located), in-memory SQLite
-- E2E: `test/e2e/` — fixture vault (12 파일) + 6 시나리오
-- embedder mock: 768차원 랜덤 벡터
-- scope config: `resetScopeConfigCache()` 테스트 헬퍼
-
-## 커밋 컨벤션
-- `feat:` 새 기능, `fix:` 버그, `test:` 테스트, `docs:` 문서, `chore:` 설정
