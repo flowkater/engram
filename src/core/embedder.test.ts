@@ -27,7 +27,7 @@ describe("ENGRAM_STRICT_LOCAL", () => {
 
     const { embed } = await import("./embedder.js");
 
-    await expect(embed("test text")).rejects.toThrow();
+    await expect(embed("test text")).rejects.toThrow("ENGRAM_STRICT_LOCAL");
 
     // Should NOT have called OpenAI
     const openaiCalls = mockFetch.mock.calls.filter((c: any) =>

@@ -49,6 +49,11 @@ export async function embed(text: string, opts?: EmbedderOptions, withModel?: tr
       const embedding = await embedOpenAI(truncatedText, apiKey);
       return withModel ? { embedding, model: "openai/text-embedding-3-small" } : embedding;
     }
+    if (apiKey && STRICT_LOCAL) {
+      throw new Error(
+        `Embedding failed: Ollama unavailable. ENGRAM_STRICT_LOCAL=true blocks OpenAI fallback. Set ENGRAM_STRICT_LOCAL=false to allow.`
+      );
+    }
     throw new Error(
       `Embedding failed: Ollama unavailable (${(err as Error).message}) and no OPENAI_API_KEY set`
     );
