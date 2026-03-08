@@ -4,6 +4,7 @@
 import type Database from "better-sqlite3";
 import { v7 as uuidv7 } from "uuid";
 import { embed, getCurrentModelName, type EmbedderOptions } from "../core/embedder.js";
+import { parseTags, insertTags } from "../utils/tags.js";
 
 export interface SummaryParams {
   summary: string;
@@ -52,6 +53,9 @@ export async function memorySummary(
     db.prepare("INSERT INTO memory_fts (id, content, summary, tags, scope) VALUES (?, ?, ?, ?, ?)").run(
       memoryId, params.summary, params.summary, tags, scope
     );
+
+    // Insert normalized tags
+    insertTags(db, memoryId, parseTags(params.tags));
 
     // Upsert session record
     const existingSession = db.prepare("SELECT id FROM sessions WHERE id = ?").get(sessionId);

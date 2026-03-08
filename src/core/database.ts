@@ -53,6 +53,14 @@ CREATE INDEX IF NOT EXISTS idx_links_from ON memory_links(from_id);
 CREATE INDEX IF NOT EXISTS idx_links_to ON memory_links(to_id);
 CREATE INDEX IF NOT EXISTS idx_links_type ON memory_links(link_type);
 
+-- Tag normalization table
+CREATE TABLE IF NOT EXISTS memory_tags (
+  memory_id TEXT NOT NULL REFERENCES memories(id),
+  tag TEXT NOT NULL,
+  PRIMARY KEY (memory_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_tags_tag ON memory_tags(tag);
+
 -- Sessions table
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,

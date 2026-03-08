@@ -6,6 +6,7 @@
 import type Database from "better-sqlite3";
 import { watch, type FSWatcher } from "chokidar";
 import path from "node:path";
+import fs from "node:fs";
 import { indexFile, softDeleteByPath } from "./indexer.js";
 import type { EmbedderOptions } from "./embedder.js";
 
@@ -25,6 +26,72 @@ export interface WatcherInstance {
 }
 
 const IGNORED_DIRS = [".obsidian", ".trash", "assets", "images", "node_modules", ".git"];
+
+/**
+ * Diff scan — find files modified since last indexing and re-index them.
+ * Called before starting the watcher to catch changes that happened while offline.
+ */
+export async function diffScan(
+  db: Database.Database,
+  vaultPath: string,
+  opts?: {
+    source?: "obsidian" | "memory-md";
+    embedOpts?: EmbedderOptions;
+    onIndexed?: (file: string, chunks: number) => void;
+    onError?: (error: Error) => void;
+  }
+): Promise<{ scanned: number; indexed: number }> {
+  const source = opts?.source || "obsidian";
+  const resolvedVault = path.resolve(vaultPath);
+
+  // Get last indexing time for this source
+  const row = db.prepare(
+    "SELECT MAX(updated_at) as t FROM memories WHERE source = ?"
+  ).get(source) as { t: string | null } | undefined;
+
+  const lastIndexedAt = row?.t ? new Date(row.t) : null;
+
+  // Walk vault for .md files
+  const mdFiles: string[] = [];
+  function walk(dir: string) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (IGNORED_DIRS.includes(entry.name)) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name.endsWith(".md")) {
+        mdFiles.push(full);
+      }
+    }
+  }
+  walk(resolvedVault);
+
+  let scanned = 0;
+  let indexed = 0;
+
+  for (const absPath of mdFiles) {
+    scanned++;
+    try {
+      const stat = fs.statSync(absPath);
+      // If no last indexed time, skip (full ingest should be used instead)
+      if (lastIndexedAt && stat.mtimeMs > lastIndexedAt.getTime()) {
+        const relativePath = path.relative(resolvedVault, absPath);
+        const result = await indexFile(db, absPath, relativePath, {
+          source,
+          embedOpts: opts?.embedOpts,
+        });
+        if (!result.skipped) {
+          indexed++;
+          opts?.onIndexed?.(relativePath, result.chunks);
+        }
+      }
+    } catch (err) {
+      opts?.onError?.(err as Error);
+    }
+  }
+
+  return { scanned, indexed };
+}
 
 /** Simple semaphore to limit concurrent indexing operations. */
 class Semaphore {

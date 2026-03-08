@@ -18,7 +18,9 @@ import { memoryIngest } from "./tools/ingest.js";
 import { memoryPrune } from "./tools/prune.js";
 import { memoryStats } from "./tools/stats.js";
 import { memoryGraph } from "./tools/graph.js";
-import { startWatcher } from "./core/watcher.js";
+import { memoryHealth } from "./tools/health.js";
+import { memoryRestore } from "./tools/restore.js";
+import { startWatcher, diffScan } from "./core/watcher.js";
 import { startScheduler } from "./core/scheduler.js";
 import { SessionTracker } from "./core/session-tracker.js";
 
@@ -251,6 +253,40 @@ server.tool(
   }
 );
 
+// --- memory.restore ---
+server.tool(
+  "memory.restore",
+  "Restore a soft-deleted memory. Re-embeds and re-inserts into all indexes.",
+  {
+    id: z.string().describe("Memory ID to restore"),
+  },
+  async ({ id }) => {
+    try {
+      sessionTracker.recordActivity("memory.restore", { id });
+      const result = await memoryRestore(db, { id });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return errorResponse("memory.restore", err);
+    }
+  }
+);
+
+// 9. memory.health — Database integrity diagnostics
+server.tool(
+  "memory.health",
+  "Diagnose database integrity: orphaned records, model mismatches, broken links",
+  {},
+  async () => {
+    try {
+      sessionTracker.recordActivity("memory.health", {});
+      const result = memoryHealth(db);
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return errorResponse("memory.health", err);
+    }
+  }
+);
+
 // --- Start server ---
 async function main() {
   const transport = new StdioServerTransport();
@@ -267,6 +303,13 @@ async function main() {
   // Start file watcher if vault exists
   if (fs.existsSync(VAULT_PATH)) {
     try {
+      // Diff scan: catch up on changes that happened while server was offline
+      const diffResult = await diffScan(db, VAULT_PATH, {
+        onIndexed: (file, chunks) => log(`[diffScan] Indexed ${file} (${chunks} chunks)`),
+        onError: (err) => log(`[diffScan] Error: ${err.message}`),
+      });
+      log(`Diff scan complete: ${diffResult.scanned} scanned, ${diffResult.indexed} indexed`);
+
       watcher = startWatcher(db, {
         vaultPath: VAULT_PATH,
         onIndexed: (file, chunks) => log(`Indexed ${file} (${chunks} chunks)`),

@@ -4,6 +4,7 @@
 import type Database from "better-sqlite3";
 import { v7 as uuidv7 } from "uuid";
 import { embed, getCurrentModelName, type EmbedderOptions } from "../core/embedder.js";
+import { parseTags, insertTags } from "../utils/tags.js";
 
 export interface AddParams {
   content: string;
@@ -55,6 +56,9 @@ export async function memoryAdd(
       INSERT INTO memory_fts (id, content, summary, tags, scope)
       VALUES (?, ?, ?, ?, ?)
     `).run(id, params.content, params.summary || "", tags, scope);
+
+    // Insert normalized tags
+    insertTags(db, id, parseTags(params.tags));
   })();
 
   return { id, scope, created_at: now };

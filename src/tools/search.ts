@@ -35,8 +35,6 @@ export async function memorySearch(
   embedOpts?: EmbedderOptions
 ): Promise<MemoryResult[]> {
   const limit = params.limit || 10;
-  // Fetch more candidates than needed to account for post-filtering (dedup, scope, deleted)
-  const fetchLimit = limit * 5;
   const minScore = params.minScore ?? 0.0;
 
   // Generate query embedding
@@ -59,28 +57,34 @@ export async function memorySearch(
   }
   const whereClause = filterConditions.join(" AND ");
 
-  // 1. Vector search — sqlite-vec requires k=? in WHERE, no external LIMIT
-  //    Filters applied post-hoc since sqlite-vec KNN doesn't support JOINs in WHERE
-  const vecRaw = db
-    .prepare(
-      `
-      SELECT id, distance
-      FROM memory_vec
-      WHERE embedding MATCH ?
-        AND k = ?
-      ORDER BY distance
-    `
-    )
-    .all(Buffer.from(queryEmbedding.buffer), fetchLimit) as Array<{
-    id: string;
-    distance: number;
-  }>;
+  // Adaptive fetch: increase multiplier if post-filter yields too few results
+  const multipliers = [5, 10, 20];
+  let vecResults: Array<{ id: string; distance: number }> = [];
+  let ftsResults: Array<{ id: string; rank: number }> = [];
 
-  // Post-filter vec results by scope/source/agent/deleted via a lookup
-  let vecResults = vecRaw;
-  if (filterParams.length > 0 || true /* always filter deleted */) {
-    const vecIds = vecRaw.map((r) => r.id);
-    if (vecIds.length > 0) {
+  for (const multiplier of multipliers) {
+    const fetchLimit = limit * multiplier;
+
+    // 1. Vector search
+    const vecRaw = db
+      .prepare(
+        `
+        SELECT id, distance
+        FROM memory_vec
+        WHERE embedding MATCH ?
+          AND k = ?
+        ORDER BY distance
+      `
+      )
+      .all(Buffer.from(queryEmbedding.buffer), fetchLimit) as Array<{
+      id: string;
+      distance: number;
+    }>;
+
+    // Post-filter vec results by scope/source/agent/deleted
+    vecResults = vecRaw;
+    if (vecRaw.length > 0) {
+      const vecIds = vecRaw.map((r) => r.id);
       const ph = vecIds.map(() => "?").join(",");
       const validIds = new Set(
         (db.prepare(
@@ -89,41 +93,44 @@ export async function memorySearch(
       );
       vecResults = vecRaw.filter((r) => validIds.has(r.id));
     }
-  }
 
-  // 2. FTS5 keyword search with scope/source/agent filter
-  let ftsResults: Array<{ id: string; rank: number }> = [];
-  try {
-    const ftsRaw = db
-      .prepare(
+    // 2. FTS5 keyword search
+    ftsResults = [];
+    try {
+      const ftsRaw = db
+        .prepare(
+          `
+          SELECT id, rank
+          FROM memory_fts
+          WHERE memory_fts MATCH ?
+          ORDER BY rank
+          LIMIT ?
         `
-        SELECT id, rank
-        FROM memory_fts
-        WHERE memory_fts MATCH ?
-        ORDER BY rank
-        LIMIT ?
-      `
-      )
-      .all(escapeFtsQuery(params.query), fetchLimit) as Array<{
-      id: string;
-      rank: number;
-    }>;
+        )
+        .all(escapeFtsQuery(params.query), fetchLimit) as Array<{
+        id: string;
+        rank: number;
+      }>;
 
-    // Post-filter by scope/source/agent/deleted
-    if (ftsRaw.length > 0 && (filterParams.length > 0 || true)) {
-      const ftsIds = ftsRaw.map((r) => r.id);
-      const ph = ftsIds.map(() => "?").join(",");
-      const validIds = new Set(
-        (db.prepare(
-          `SELECT id FROM memories WHERE id IN (${ph}) AND ${whereClause}`
-        ).all(...ftsIds, ...filterParams) as Array<{ id: string }>).map((r) => r.id)
-      );
-      ftsResults = ftsRaw.filter((r) => validIds.has(r.id));
-    } else {
-      ftsResults = ftsRaw;
+      if (ftsRaw.length > 0) {
+        const ftsIds = ftsRaw.map((r) => r.id);
+        const ph = ftsIds.map(() => "?").join(",");
+        const validIds = new Set(
+          (db.prepare(
+            `SELECT id FROM memories WHERE id IN (${ph}) AND ${whereClause}`
+          ).all(...ftsIds, ...filterParams) as Array<{ id: string }>).map((r) => r.id)
+        );
+        ftsResults = ftsRaw.filter((r) => validIds.has(r.id));
+      }
+    } catch {
+      // FTS query might fail on special characters; fall back to vec only
     }
-  } catch {
-    // FTS query might fail on special characters; fall back to vec only
+
+    // Check if we have enough results
+    const uniqueIds = new Set([...vecResults.map((r) => r.id), ...ftsResults.map((r) => r.id)]);
+    if (uniqueIds.size >= limit) break;
+    // If we fetched all available vectors, no point increasing multiplier
+    if (vecRaw.length < fetchLimit) break;
   }
 
   // 3. RRF merge

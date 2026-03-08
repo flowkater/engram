@@ -120,4 +120,23 @@ describe("memory.graph", () => {
     const result = await memoryGraph(inst.db, { memoryId: "A", hops: 3, limit: 1 });
     expect(result.connected.length).toBeLessThanOrEqual(1);
   });
+
+  it("no duplicates when bidirectional links exist", async () => {
+    // Add reverse link B -> A (bidirectional)
+    const now = new Date().toISOString();
+    inst.db.prepare(
+      "INSERT INTO memory_links (from_id, to_id, link_type, weight, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run("B", "A", "wikilink", 1.0, now);
+    // Also add D -> A reverse
+    inst.db.prepare(
+      "INSERT INTO memory_links (from_id, to_id, link_type, weight, created_at) VALUES (?, ?, ?, ?, ?)"
+    ).run("D", "A", "tag", 0.5, now);
+
+    const result = await memoryGraph(inst.db, { memoryId: "A", hops: 2 });
+    const ids = result.connected.map((c) => c.memory.id);
+    // Each node should appear at most once
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids).toContain("B");
+    expect(ids).toContain("D");
+  });
 });

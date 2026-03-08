@@ -14,4 +14,5 @@ export function deleteRelatedRecords(db: Database.Database, ids: string[]): void
   db.prepare(`DELETE FROM memory_fts WHERE id IN (${placeholders})`).run(...ids);
   db.prepare(`DELETE FROM memory_vec WHERE id IN (${placeholders})`).run(...ids);
   db.prepare(`DELETE FROM memory_links WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).run(...ids, ...ids);
+  db.prepare(`DELETE FROM memory_tags WHERE memory_id IN (${placeholders})`).run(...ids);
 }

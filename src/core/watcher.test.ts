@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { openDatabase, type DatabaseInstance } from "./database.js";
-import { startWatcher } from "./watcher.js";
+import { startWatcher, diffScan } from "./watcher.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -127,6 +127,41 @@ describe("watcher", () => {
     expect(row.deleted).toBe(1);
 
     await w.close();
+  }, 15000);
+
+  it("diffScan indexes files modified after last indexing", async () => {
+    const dir = tmpDir();
+    // Insert a memory with old updated_at to establish a baseline
+    const oldTime = new Date(Date.now() - 60000).toISOString();
+    inst.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, scope, tags, importance, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("diff-old-1", "old content", "obsidian", "old.md", "hash-old", "global", "[]", 0.5, oldTime, oldTime);
+
+    // Create a file with current mtime (newer than the baseline)
+    fs.writeFileSync(path.join(dir, "new-file.md"), "# New File\n\nContent after last index.");
+
+    const result = await diffScan(inst.db, dir);
+
+    expect(result.scanned).toBe(1);
+    expect(result.indexed).toBe(1);
+  }, 15000);
+
+  it("diffScan skips files not modified since last indexing", async () => {
+    const dir = tmpDir();
+    // Create file first
+    const filePath = path.join(dir, "old-file.md");
+    fs.writeFileSync(filePath, "# Old File\n\nOld content.");
+
+    // Set last indexing time to the future
+    const futureTime = new Date(Date.now() + 60000).toISOString();
+    inst.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, scope, tags, importance, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("diff-future-1", "future content", "obsidian", "future.md", "hash-f", "global", "[]", 0.5, futureTime, futureTime);
+
+    const result = await diffScan(inst.db, dir);
+
+    expect(result.scanned).toBe(1);
+    expect(result.indexed).toBe(0);
   }, 15000);
 
   it("ignores .obsidian directory", async () => {

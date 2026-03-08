@@ -11,6 +11,7 @@ import { embed, getCurrentModelName, type EmbedderOptions } from "./embedder.js"
 import { sha256 } from "../utils/hash.js";
 import { detectObsidianScope } from "../utils/scope.js";
 import { deleteRelatedRecords } from "../utils/delete-related.js";
+import { parseTags, insertTags } from "../utils/tags.js";
 import pLimit from "p-limit";
 // NOTE: pLimit(3) here is independent of watcher.ts's Semaphore(3).
 // Watcher limits concurrent file processing; this limits concurrent embedding API calls within a single indexFile call.
@@ -144,6 +145,7 @@ export async function indexFile(
       );
       insertVec.run(id, Buffer.from(embedding.buffer));
       insertFts.run(id, chunk.text, "", tags, chunkScope);
+      insertTags(db, id, parseTags(chunk.meta.tags));
       chunkIds.push(id);
 
       // Extract wikilinks and create link records to existing memories
@@ -161,13 +163,15 @@ export async function indexFile(
         }
       }
 
-      // Create tag-based links to other memories with same tags
-      const chunkTags = chunk.meta.tags || [];
+      // Create tag-based links to other memories with same tags (via memory_tags index)
+      const chunkTags = parseTags(chunk.meta.tags);
       if (chunkTags.length > 0) {
         for (const tag of chunkTags) {
           const tagMatches = db.prepare(
-            "SELECT id FROM memories WHERE tags LIKE ? AND id != ? AND deleted = 0 LIMIT 10"
-          ).all(`%${tag}%`, id) as Array<{ id: string }>;
+            `SELECT DISTINCT mt.memory_id AS id FROM memory_tags mt
+             JOIN memories m ON m.id = mt.memory_id
+             WHERE mt.tag = ? AND mt.memory_id != ? AND m.deleted = 0 LIMIT 10`
+          ).all(tag, id) as Array<{ id: string }>;
 
           for (const match of tagMatches) {
             insertLink.run(id, match.id, "tag", 0.5, new Date().toISOString());
