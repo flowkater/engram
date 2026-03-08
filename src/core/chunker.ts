@@ -199,6 +199,31 @@ function splitLargeSection(
       currentTokens = 0;
     }
 
+    // Hard split: if a single paragraph exceeds maxTokens, split by characters
+    if (paraTokens > maxTokens) {
+      // Flush current buffer first
+      if (currentParts.length > 0) {
+        results.push({
+          heading: isFirst ? section.heading : section.heading ? `${section.heading} (cont.)` : undefined,
+          content: currentParts.join("\n\n").trim(),
+        });
+        isFirst = false;
+        currentParts = [];
+        currentTokens = 0;
+      }
+      // Split oversized paragraph by estimated char limit
+      const charsPerToken = /[\u3131-\uD79D\uAC00-\uD7A3]/.test(para) ? 2 : 4;
+      const maxChars = maxTokens * charsPerToken;
+      for (let i = 0; i < para.length; i += maxChars) {
+        results.push({
+          heading: isFirst ? section.heading : section.heading ? `${section.heading} (cont.)` : undefined,
+          content: para.slice(i, i + maxChars).trim(),
+        });
+        isFirst = false;
+      }
+      continue;
+    }
+
     currentParts.push(para);
     currentTokens += paraTokens;
   }

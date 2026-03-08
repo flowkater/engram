@@ -6,6 +6,8 @@
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "nomic-embed-text";
 const EMBEDDING_DIM = 768;
+// nomic-embed-text context limit is 8192 tokens (~28,000 chars)
+const MAX_EMBED_CHARS = 28_000;
 
 export interface EmbedderOptions {
   ollamaBaseUrl?: string;
@@ -25,17 +27,19 @@ export interface EmbedResult {
 export async function embed(text: string, opts?: EmbedderOptions): Promise<Float32Array>;
 export async function embed(text: string, opts: EmbedderOptions | undefined, withModel: true): Promise<EmbedResult>;
 export async function embed(text: string, opts?: EmbedderOptions, withModel?: true): Promise<Float32Array | EmbedResult> {
+  // Truncate to stay within nomic-embed-text context limit (8192 tokens)
+  const truncatedText = text.length > MAX_EMBED_CHARS ? text.slice(0, MAX_EMBED_CHARS) : text;
   const baseUrl = opts?.ollamaBaseUrl || OLLAMA_BASE_URL;
   const model = opts?.ollamaModel || OLLAMA_MODEL;
 
   try {
-    const embedding = await embedOllama(text, baseUrl, model);
+    const embedding = await embedOllama(truncatedText, baseUrl, model);
     return withModel ? { embedding, model: `ollama/${model}` } : embedding;
   } catch (err) {
     const apiKey = opts?.openaiApiKey || process.env.OPENAI_API_KEY;
     if (apiKey) {
       console.warn("[embedder] Ollama failed, falling back to OpenAI:", (err as Error).message);
-      const embedding = await embedOpenAI(text, apiKey);
+      const embedding = await embedOpenAI(truncatedText, apiKey);
       return withModel ? { embedding, model: "openai/text-embedding-3-small" } : embedding;
     }
     throw new Error(
