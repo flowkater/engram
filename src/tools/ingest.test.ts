@@ -54,6 +54,10 @@ describe("memory.ingest source_path normalization", () => {
       expect(row.source_path).not.toBe("note.md");
       expect(row.source_path).toContain("note.md");
     }
+
+    // Verify embed_model is stored
+    const emRow = inst.db.prepare("SELECT embed_model FROM memories WHERE deleted = 0 LIMIT 1").get() as any;
+    expect(emRow.embed_model).toBe("test-model");
   });
 
   it("two files with same basename in different dirs stored as distinct source_paths", async () => {

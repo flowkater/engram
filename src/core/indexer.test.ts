@@ -45,6 +45,10 @@ describe("indexer", () => {
     // Verify in DB
     const rows = inst.db.prepare("SELECT * FROM memories WHERE source_path = ? AND deleted = 0").all("test.md");
     expect(rows.length).toBe(result.chunks);
+
+    // Verify embed_model is stored
+    const row = inst.db.prepare("SELECT embed_model FROM memories WHERE source_path = ? AND deleted = 0 LIMIT 1").get("test.md") as any;
+    expect(row.embed_model).toBe("test-model");
   });
 
   it("skips already indexed file with same hash", async () => {
