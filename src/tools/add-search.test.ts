@@ -8,33 +8,9 @@ import { memoryAdd } from "./add.js";
 import { memorySearch } from "./search.js";
 import path from "node:path";
 import os from "node:os";
-
-// Mock the embedder to return deterministic vectors
-vi.mock("../core/embedder.js", () => {
-  // Simple hash-based embedding: creates a distinct 768-dim vector per string
-  function fakeEmbed(text: string): Promise<Float32Array> {
-    const vec = new Float32Array(768);
-    // Seed from text content to make similar texts produce similar vectors
-    for (let i = 0; i < text.length && i < 768; i++) {
-      vec[i] = text.charCodeAt(i) / 256;
-    }
-    // Normalize
-    let norm = 0;
-    for (let i = 0; i < 768; i++) norm += vec[i] * vec[i];
-    norm = Math.sqrt(norm);
-    if (norm > 0) for (let i = 0; i < 768; i++) vec[i] /= norm;
-    return Promise.resolve(vec);
-  }
-
-  return {
-    embed: (text: string, _opts?: unknown, withModel?: boolean) => {
-      const p = fakeEmbed(text);
-      if (withModel) return p.then((embedding: Float32Array) => ({ embedding, model: "test/fake-model" }));
-      return p;
-    },
-    EMBEDDING_DIM: 768,
-    getCurrentModelName: () => "test/fake-model",
-  };
+vi.mock("../core/embedder.js", async () => {
+  const { createMockEmbedder } = await import("../__test__/mock-embedder.js");
+  return createMockEmbedder();
 });
 
 function tmpDbPath(): string {
