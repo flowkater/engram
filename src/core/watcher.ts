@@ -206,8 +206,8 @@ export function startWatcher(
     }
   });
 
-  watcher.on("error", (err: Error) => {
-    opts.onError?.(err);
+  watcher.on("error", (err: unknown) => {
+    opts.onError?.(err instanceof Error ? err : new Error(String(err)));
   });
 
   return {
