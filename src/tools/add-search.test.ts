@@ -27,7 +27,11 @@ vi.mock("../core/embedder.js", () => {
   }
 
   return {
-    embed: fakeEmbed,
+    embed: (text: string, _opts?: unknown, withModel?: boolean) => {
+      const p = fakeEmbed(text);
+      if (withModel) return p.then((embedding: Float32Array) => ({ embedding, model: "test/fake-model" }));
+      return p;
+    },
     EMBEDDING_DIM: 768,
     getCurrentModelName: () => "test/fake-model",
   };

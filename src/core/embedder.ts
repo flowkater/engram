@@ -56,7 +56,8 @@ export async function embed(text: string, opts?: EmbedderOptions, withModel?: tr
 }
 
 /**
- * Get the current embedding model name (for mismatch detection).
+ * @deprecated Use embed(text, opts, true) and read result.model instead.
+ * Kept only for health-check model mismatch detection.
  */
 export function getCurrentModelName(opts?: EmbedderOptions): string {
   return `ollama/${opts?.ollamaModel || OLLAMA_MODEL}`;

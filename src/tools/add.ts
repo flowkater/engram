@@ -3,7 +3,7 @@
  */
 import type Database from "better-sqlite3";
 import { v7 as uuidv7 } from "uuid";
-import { embed, getCurrentModelName, type EmbedderOptions } from "../core/embedder.js";
+import { embed, type EmbedderOptions } from "../core/embedder.js";
 import { parseTags, insertTags } from "../utils/tags.js";
 
 export interface AddParams {
@@ -38,14 +38,14 @@ export async function memoryAdd(
   const source = params.source || "manual";
 
   // Generate embedding (outside transaction — network I/O)
-  const embedding = await embed(params.content, embedOpts);
+  const { embedding, model: embedModel } = await embed(params.content, embedOpts, true);
 
   // Atomic insert: memories + vec + FTS
   db.transaction(() => {
     db.prepare(`
       INSERT INTO memories (id, content, summary, source, scope, agent, tags, importance, created_at, updated_at, embed_model)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, params.content, params.summary || null, source, scope, params.agent || null, tags, importance, now, now, getCurrentModelName(embedOpts));
+    `).run(id, params.content, params.summary || null, source, scope, params.agent || null, tags, importance, now, now, embedModel);
 
     db.prepare(`
       INSERT INTO memory_vec (id, embedding)

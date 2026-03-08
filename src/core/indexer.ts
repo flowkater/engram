@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { v7 as uuidv7 } from "uuid";
 import { chunkMarkdown, extractWikiLinks, type ChunkOptions, OBSIDIAN_CHUNK_OPTS, MEMORY_MD_CHUNK_OPTS } from "./chunker.js";
-import { embed, getCurrentModelName, type EmbedderOptions } from "./embedder.js";
+import { embed, type EmbedderOptions, type EmbedResult } from "./embedder.js";
 import { sha256 } from "../utils/hash.js";
 import { detectObsidianScope } from "../utils/scope.js";
 import { deleteRelatedRecords } from "../utils/delete-related.js";
@@ -123,14 +123,14 @@ export async function indexFile(
 
   // Pre-compute embeddings outside transaction (network I/O)
   // Skip chunks that fail embedding (e.g. Ollama YAML parse errors on certain content)
-  const embeddings: (Float32Array | null)[] = [];
+  const embedResults: (EmbedResult | null)[] = [];
   for (const chunk of chunks) {
     try {
-      const embedding = await embed(chunk.text, opts.embedOpts);
-      embeddings.push(embedding);
+      const result = await embed(chunk.text, opts.embedOpts, true);
+      embedResults.push(result);
     } catch (err) {
       console.warn(`[indexer] Skipping chunk ${chunk.index} of ${relativePath}: ${(err as Error).message}`);
-      embeddings.push(null);
+      embedResults.push(null);
     }
   }
 
@@ -138,19 +138,18 @@ export async function indexFile(
   db.transaction(() => {
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
-      const embedding = embeddings[ci];
-      if (!embedding) continue; // skip chunks with failed embeddings
+      const embedResult = embedResults[ci];
+      if (!embedResult) continue; // skip chunks with failed embeddings
       const id = uuidv7();
       const now = new Date().toISOString();
       const tags = JSON.stringify(chunk.meta.tags || []);
       const chunkScope = chunk.meta.scope || scope;
 
-      const embedModel = getCurrentModelName(opts.embedOpts);
       insertMemory.run(
         id, chunk.text, null, opts.source, relativePath, hash,
-        chunk.index, chunkScope, null, tags, importance, now, now, embedModel
+        chunk.index, chunkScope, null, tags, importance, now, now, embedResult.model
       );
-      insertVec.run(id, Buffer.from(embedding.buffer));
+      insertVec.run(id, Buffer.from(embedResult.embedding.buffer));
       insertFts.run(id, chunk.text, "", tags, chunkScope);
       insertTags(db, id, parseTags(chunk.meta.tags));
       chunkIds.push(id);

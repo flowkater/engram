@@ -3,7 +3,7 @@
  * Re-embeds content and re-inserts into vec, FTS, and tags tables.
  */
 import type Database from "better-sqlite3";
-import { embed, getCurrentModelName, type EmbedderOptions } from "../core/embedder.js";
+import { embed, type EmbedderOptions } from "../core/embedder.js";
 import { parseTags, insertTags } from "../utils/tags.js";
 
 export interface RestoreParams {
@@ -41,7 +41,7 @@ export async function memoryRestore(
   }
 
   // Re-embed (outside transaction — network I/O)
-  const embedding = await embed(row.content, embedOpts);
+  const { embedding, model: embedModel } = await embed(row.content, embedOpts, true);
   const now = new Date().toISOString();
   const tags = parseTags(row.tags);
 
@@ -49,7 +49,7 @@ export async function memoryRestore(
   db.transaction(() => {
     db.prepare(
       "UPDATE memories SET deleted = 0, updated_at = ?, embed_model = ? WHERE id = ?"
-    ).run(now, getCurrentModelName(embedOpts), id);
+    ).run(now, embedModel, id);
 
     db.prepare(
       "INSERT INTO memory_vec (id, embedding) VALUES (?, ?)"

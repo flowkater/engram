@@ -17,7 +17,15 @@ vi.mock("../core/embedder.js", () => {
     if (norm > 0) for (let i = 0; i < 768; i++) vec[i] /= norm;
     return Promise.resolve(vec);
   }
-  return { embed: fakeEmbed, EMBEDDING_DIM: 768, getCurrentModelName: () => "test/fake-model" };
+  return {
+    embed: (text: string, _opts?: unknown, withModel?: boolean) => {
+      const p = fakeEmbed(text);
+      if (withModel) return p.then((embedding: Float32Array) => ({ embedding, model: "test/fake-model" }));
+      return p;
+    },
+    EMBEDDING_DIM: 768,
+    getCurrentModelName: () => "test/fake-model",
+  };
 });
 
 function tmpDbPath(): string {
