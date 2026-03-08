@@ -156,7 +156,7 @@ export class SessionTracker {
         const path = await import("node:path");
         const logsDir = path.join(
           process.env.HOME || "~",
-          ".unified-memory",
+          ".engram",
           "logs"
         );
         fs.mkdirSync(logsDir, { recursive: true });

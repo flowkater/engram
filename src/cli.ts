@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Memory CLI — index, stats, prune subcommands.
+ * Engram CLI — index, stats, prune subcommands.
  */
 import path from "node:path";
 import { openDatabase } from "./core/database.js";
@@ -8,16 +8,16 @@ import { indexDirectory } from "./core/indexer.js";
 import { memoryStats } from "./tools/stats.js";
 import { memoryPrune } from "./tools/prune.js";
 
-const DB_PATH = process.env.MEMORY_DB || path.join(process.env.HOME || "~", ".unified-memory", "memory.db");
+const DB_PATH = process.env.MEMORY_DB || path.join(process.env.HOME || "~", ".engram", "memory.db");
 
 function printUsage() {
   console.log(`
-unified-memory — CLI for Unified Memory MCP Server
+engram — CLI for Engram MCP Server
 
 Usage:
-  unified-memory index <path> [--source obsidian|manual|memory-md] [--scope <scope>]
-  unified-memory stats
-  unified-memory prune [--days <N>] [--scope <scope>] [--execute]
+  engram index <path> [--source obsidian|manual|memory-md] [--scope <scope>]
+  engram stats
+  engram prune [--days <N>] [--scope <scope>] [--execute]
 
 Commands:
   index    Index a directory of markdown files

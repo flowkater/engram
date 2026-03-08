@@ -1,4 +1,4 @@
-# AGENTS.md — Unified Memory MCP Server
+# AGENTS.md — Engram MCP Server
 
 Review by: 2026-06-08
 
@@ -41,5 +41,5 @@ Review by: 2026-06-08
 
 ## Rule: scope 매핑은 config.json 외부화
 - **Why**: 하드코딩 경로는 환경 종속. config.json으로 외부화하여 재사용성 확보
-- **Enforcement**: `src/utils/scope.ts`에 경로 하드코딩 금지. `~/.unified-memory/config.json`에서 로드
+- **Enforcement**: `src/utils/scope.ts`에 경로 하드코딩 금지. `~/.engram/config.json`에서 로드
 - **Scope**: `src/utils/scope.ts`

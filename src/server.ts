@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Unified Memory MCP Server — stdio transport entry point.
+ * Engram MCP Server — stdio transport entry point.
  * Registers all 8 memory tools.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -25,12 +25,12 @@ import { startScheduler } from "./core/scheduler.js";
 import { SessionTracker } from "./core/session-tracker.js";
 
 const DB_PATH = process.env.MEMORY_DB ||
-  path.join(process.env.HOME || "~", ".unified-memory", "memory.db");
+  path.join(process.env.HOME || "~", ".engram", "memory.db");
 const VAULT_PATH = process.env.VAULT_PATH ||
   path.join(process.env.HOME || "~", "Obsidian", "flowkater", "flowkater");
 
 // Ensure logs directory exists
-const LOG_DIR = path.join(process.env.HOME || "~", ".unified-memory", "logs");
+const LOG_DIR = path.join(process.env.HOME || "~", ".engram", "logs");
 if (!fs.existsSync(LOG_DIR)) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
 }
@@ -39,7 +39,7 @@ if (!fs.existsSync(LOG_DIR)) {
  * Log to stderr and file.
  */
 function log(message: string) {
-  const line = `[unified-memory] ${message}`;
+  const line = `[engram] ${message}`;
   console.error(line);
   try {
     const logFile = path.join(LOG_DIR, `server-${new Date().toISOString().slice(0, 10)}.log`);
@@ -71,7 +71,7 @@ const db = dbInstance.db;
 }
 
 const server = new McpServer({
-  name: "unified-memory",
+  name: "engram",
   version: "0.1.0",
 });
 

@@ -8,7 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 
 const DEFAULT_DB_PATH = path.join(
-  process.env.MEMORY_DB || path.join(process.env.HOME || "~", ".unified-memory", "memory.db")
+  process.env.MEMORY_DB || path.join(process.env.HOME || "~", ".engram", "memory.db")
 );
 
 const SCHEMA_SQL = `

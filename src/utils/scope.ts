@@ -1,6 +1,6 @@
 /**
  * Scope detection — maps cwd or Obsidian paths to project scopes.
- * Loads scope map from ~/.unified-memory/config.json if available,
+ * Loads scope map from ~/.engram/config.json if available,
  * falls back to built-in defaults.
  */
 import fs from "node:fs";
@@ -37,11 +37,11 @@ interface ScopeConfig {
 }
 
 // Config is cached for the lifetime of the process.
-// Changes to ~/.unified-memory/config.json require a server restart to take effect.
+// Changes to ~/.engram/config.json require a server restart to take effect.
 let _cachedConfig: ScopeConfig | null = null;
 
 /**
- * Load scope configuration from ~/.unified-memory/config.json.
+ * Load scope configuration from ~/.engram/config.json.
  * Returns defaults if config file doesn't exist or is invalid.
  */
 function loadConfig(): ScopeConfig {
@@ -49,7 +49,7 @@ function loadConfig(): ScopeConfig {
 
   const configPath = path.join(
     process.env.HOME || "~",
-    ".unified-memory",
+    ".engram",
     "config.json"
   );
 

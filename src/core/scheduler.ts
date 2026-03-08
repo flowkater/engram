@@ -107,7 +107,7 @@ export function startScheduler(
     log("Starting log rotation...");
     const logDir = path.join(
       (process.env.HOME || "~"),
-      ".unified-memory",
+      ".engram",
       "logs"
     );
     if (fs.existsSync(logDir)) {
@@ -133,7 +133,7 @@ export function startScheduler(
   const backupTask = cron.schedule("0 4 * * *", () => {
     log("Starting DB backup...");
     const homeDir = process.env.HOME || "~";
-    const backupDir = path.join(homeDir, ".unified-memory", "backups");
+    const backupDir = path.join(homeDir, ".engram", "backups");
     if (!fs.existsSync(backupDir)) {
       fs.mkdirSync(backupDir, { recursive: true });
     }

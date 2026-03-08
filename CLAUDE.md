@@ -1,4 +1,4 @@
-# CLAUDE.md — Unified Memory MCP Server
+# CLAUDE.md — Engram MCP Server
 
 ## 프로젝트 개요
 로컬 AI 에이전트 공유 메모리 MCP 서버. Ollama + SQLite 기반, 100% 로컬.
@@ -60,7 +60,7 @@ src/
 - **DB 마이그레이션**: `database.ts`의 `openDatabase()` 내 CREATE IF NOT EXISTS + ALTER TABLE 패턴
 - **임베딩 차원**: 768 고정. embed_model 컬럼으로 모델 변경 감지
 - **동시성 제한**: indexer pLimit(3), watcher Semaphore(3) — Ollama 과부하 방지
-- **scope 설정**: `~/.unified-memory/config.json`에서 외부화 (변경 시 서버 재시작 필요)
+- **scope 설정**: `~/.engram/config.json`에서 외부화 (변경 시 서버 재시작 필요)
 
 ## MCP Tools (10개)
 | Tool | 입력 | 설명 |

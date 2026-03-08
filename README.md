@@ -1,4 +1,4 @@
-# Unified Memory MCP Server
+# Engram MCP Server
 
 Local AI agent memory server using MCP (Model Context Protocol). Provides semantic + keyword hybrid search across Obsidian vault, MEMORY.md files, and agent sessions.
 
@@ -24,7 +24,7 @@ ollama serve &             # 백그라운드 실행
 ollama pull nomic-embed-text
 
 # 2. 프로젝트 빌드
-cd ~/.unified-memory
+cd ~/.engram
 npm install
 npm run build
 
@@ -50,7 +50,7 @@ node dist/cli.js stats
 ## Installation
 
 ```bash
-cd ~/.unified-memory
+cd ~/.engram
 npm install
 npm run build
 ```
@@ -62,11 +62,11 @@ npm run build
 ```json
 {
   "mcpServers": {
-    "unified-memory": {
+    "engram": {
       "command": "node",
-      "args": ["/Users/flowkater/.unified-memory/dist/server.js"],
+      "args": ["/Users/flowkater/.engram/dist/server.js"],
       "env": {
-        "MEMORY_DB": "/Users/flowkater/.unified-memory/memory.db",
+        "MEMORY_DB": "/Users/flowkater/.engram/memory.db",
         "VAULT_PATH": "/Users/flowkater/Obsidian/flowkater/flowkater"
       }
     }
@@ -84,16 +84,16 @@ See `docs/` for detailed configuration guides.
 
 ```bash
 # Index Obsidian vault
-unified-memory index ~/Obsidian/flowkater/flowkater --source obsidian
+engram index ~/Obsidian/flowkater/flowkater --source obsidian
 
 # View stats
-unified-memory stats
+engram stats
 
 # Preview prune candidates
-unified-memory prune --days 90
+engram prune --days 90
 
 # Actually prune
-unified-memory prune --days 180 --execute
+engram prune --days 180 --execute
 ```
 
 ## MCP Tools
@@ -115,7 +115,7 @@ unified-memory prune --days 180 --execute
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MEMORY_DB` | `~/.unified-memory/memory.db` | Database path |
+| `MEMORY_DB` | `~/.engram/memory.db` | Database path |
 | `VAULT_PATH` | `~/Obsidian/flowkater/flowkater` | Obsidian vault path |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API URL |
 | `OLLAMA_MODEL` | `nomic-embed-text` | Embedding model |
@@ -134,7 +134,7 @@ npm run build        # Build for production
 
 ```
 Codex CLI ──┐
-Claude Code ─┤──> Unified Memory MCP Server <── Obsidian vault
+Claude Code ─┤──> Engram MCP Server <── Obsidian vault
 OpenClaw ────┘    (SQLite + sqlite-vec + FTS5)  <── MEMORY.md
 ```
 
