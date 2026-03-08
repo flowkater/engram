@@ -6,12 +6,14 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 
 ## Features
 
-- **8 MCP Tools**: add, search, context, summary, ingest, prune, stats, graph
-- **Hybrid Search**: Vector similarity (sqlite-vec) + FTS5 keyword + RRF merge
-- **Obsidian Integration**: Auto-indexes vault, watches for changes via chokidar
+- **10 MCP Tools**: add, search, context, summary, ingest, prune, stats, graph, health, restore
+- **Hybrid Search**: Vector similarity (sqlite-vec) + FTS5 keyword + RRF merge + adaptive fetch
+- **Obsidian Integration**: Auto-indexes vault, watches for changes, diff scan on restart
 - **Multi-Agent**: Codex CLI, Claude Code, OpenClaw share one memory store
-- **Graph Layer**: Wikilink/tag/scope-based relationships with 1-3 hop traversal
-- **Scope Isolation**: Project-scoped memories (todait-backend, blog, etc.)
+- **Graph Layer**: Normalized tag table + wikilink relationships with UNION dedup
+- **Scope Isolation**: Config-based project scoping (external `config.json`)
+- **Integrity**: Health checks, transactional writes, soft-delete with sync cleanup
+- **108 Tests**: Unit + E2E with fixture vault
 
 ## Quick Start (로컬 테스트)
 
@@ -99,13 +101,15 @@ unified-memory prune --days 180 --execute
 | Tool | Description |
 |------|-------------|
 | `memory.add` | Save a new memory with embedding |
-| `memory.search` | Semantic + keyword hybrid search |
-| `memory.context` | Auto-load context by cwd scope detection |
+| `memory.search` | Semantic + keyword hybrid search (adaptive fetch) |
+| `memory.context` | Auto-load context by cwd scope (weighted scoring) |
 | `memory.summary` | Save session summary for continuity |
 | `memory.ingest` | Index files/directories into memory |
 | `memory.prune` | Clean old/unused memories (dry-run default) |
 | `memory.stats` | View store statistics |
-| `memory.graph` | Explore memory connections (1-3 hops) |
+| `memory.graph` | Explore memory connections (UNION dedup, 1-3 hops) |
+| `memory.health` | Check DB integrity (orphans, model mismatch) |
+| `memory.restore` | Restore soft-deleted memory with re-embedding |
 
 ## Environment Variables
 
@@ -121,7 +125,7 @@ unified-memory prune --days 180 --execute
 
 ```bash
 npm run dev          # Run server in dev mode
-npm test             # Run all tests
+npm test             # Run all tests (108)
 npm run test:watch   # Watch mode
 npm run build        # Build for production
 ```
