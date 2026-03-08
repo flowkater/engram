@@ -1,5 +1,5 @@
 /**
- * Test: MCP server registers all 8 memory tools.
+ * Test: MCP server registers all 10 memory tools.
  */
 import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -16,10 +16,12 @@ const ALL_TOOLS = [
   "memory.prune",
   "memory.stats",
   "memory.graph",
+  "memory.health",
+  "memory.restore",
 ];
 
 describe("MCP server tools", () => {
-  it("registers all 8 memory tools", async () => {
+  it("registers all 10 memory tools", async () => {
     const server = new McpServer({
       name: "unified-memory",
       version: "0.1.0",
@@ -42,6 +44,10 @@ describe("MCP server tools", () => {
       async () => ({ content: [{ type: "text" as const, text: "{}" }] }));
     server.tool("memory.graph", "Explore connections", {},
       async () => ({ content: [{ type: "text" as const, text: "{}" }] }));
+    server.tool("memory.health", "Health check", {},
+      async () => ({ content: [{ type: "text" as const, text: "{}" }] }));
+    server.tool("memory.restore", "Restore deleted memories", { id: z.string() },
+      async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -56,7 +62,7 @@ describe("MCP server tools", () => {
       expect(toolNames).toContain(tool);
     }
 
-    expect(tools).toHaveLength(8);
+    expect(tools).toHaveLength(10);
 
     await client.close();
     await server.close();
