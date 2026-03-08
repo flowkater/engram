@@ -210,9 +210,9 @@ export async function indexDirectory(
     const batchResults = await Promise.all(
       batch.map((file) =>
         limit(async () => {
-          const fullPath = path.join(dirPath, file);
+          const fullPath = path.resolve(path.join(dirPath, file));
           try {
-            return await indexFile(db, fullPath, file, opts);
+            return await indexFile(db, fullPath, fullPath, opts);
           } catch (err) {
             console.warn(`[indexer] Failed to index ${file}: ${(err as Error).message}`);
             return { file, chunks: 0, skipped: true };

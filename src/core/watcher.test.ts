@@ -62,8 +62,10 @@ describe("watcher", () => {
 
     await waitFor(() => indexed.includes("new-note.md"));
 
-    const rows = inst.db.prepare("SELECT * FROM memories WHERE source_path = ? AND deleted = 0").all("new-note.md");
+    const rows = inst.db.prepare("SELECT * FROM memories WHERE deleted = 0 AND source_path LIKE '%new-note.md'").all();
     expect(rows.length).toBeGreaterThanOrEqual(1);
+    // source_path should be absolute
+    expect(path.isAbsolute((rows[0] as any).source_path)).toBe(true);
 
     await w.close();
   }, 15000);
@@ -92,9 +94,10 @@ describe("watcher", () => {
   it("soft-deletes on file removal", async () => {
     const dir = tmpDir();
     const now = new Date().toISOString();
+    const absDeletePath = path.resolve(path.join(dir, "to-delete.md"));
     inst.db.prepare(
       "INSERT INTO memories (id, content, source, source_path, source_hash, scope, tags, importance, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run("del-test-1", "content", "obsidian", "to-delete.md", "hash1", "global", "[]", 0.5, now, now);
+    ).run("del-test-1", "content", "obsidian", absDeletePath, "hash1", "global", "[]", 0.5, now, now);
 
     fs.writeFileSync(path.join(dir, "to-delete.md"), "# Delete Me");
 

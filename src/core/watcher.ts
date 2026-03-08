@@ -76,7 +76,7 @@ export async function diffScan(
       // If no last indexed time, skip (full ingest should be used instead)
       if (lastIndexedAt && stat.mtimeMs > lastIndexedAt.getTime()) {
         const relativePath = path.relative(resolvedVault, absPath);
-        const result = await indexFile(db, absPath, relativePath, {
+        const result = await indexFile(db, absPath, absPath, {
           source,
           embedOpts: opts?.embedOpts,
         });
@@ -163,7 +163,7 @@ export function startWatcher(
         debounceTimers.delete(relativePath);
         await indexSemaphore.acquire();
         try {
-          const result = await indexFile(db, absPath, relativePath, {
+          const result = await indexFile(db, absPath, absPath, {
             source,
             embedOpts: opts.embedOpts,
           });
@@ -199,7 +199,7 @@ export function startWatcher(
       debounceTimers.delete(relativePath);
     }
     try {
-      softDeleteByPath(db, relativePath);
+      softDeleteByPath(db, absPath);
       opts.onDeleted?.(relativePath);
     } catch (err) {
       opts.onError?.(err as Error);

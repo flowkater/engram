@@ -92,6 +92,12 @@ describe("indexer", () => {
     expect(results).toHaveLength(3);
     const totalChunks = results.reduce((s, r) => s + r.chunks, 0);
     expect(totalChunks).toBeGreaterThanOrEqual(3);
+
+    // Verify all source_paths in DB are absolute
+    const rows = inst.db.prepare("SELECT DISTINCT source_path FROM memories WHERE deleted = 0").all() as Array<{ source_path: string }>;
+    for (const row of rows) {
+      expect(path.isAbsolute(row.source_path)).toBe(true);
+    }
   });
 
   it("ignores .obsidian and .trash directories", async () => {
@@ -104,7 +110,8 @@ describe("indexer", () => {
 
     const results = await indexDirectory(inst.db, dir, { source: "obsidian" });
     expect(results).toHaveLength(1);
-    expect(results[0].file).toBe("note.md");
+    expect(path.isAbsolute(results[0].file)).toBe(true);
+    expect(results[0].file).toBe(path.resolve(path.join(dir, "note.md")));
   });
 
   it("softDeleteByPath marks chunks as deleted", () => {
