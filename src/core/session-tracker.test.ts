@@ -17,7 +17,7 @@ vi.mock("../core/embedder.js", () => {
     if (norm > 0) for (let i = 0; i < 768; i++) vec[i] /= norm;
     return Promise.resolve(vec);
   }
-  return { embed: fakeEmbed, EMBEDDING_DIM: 768 };
+  return { embed: fakeEmbed, EMBEDDING_DIM: 768, getCurrentModelName: () => "test/fake-model" };
 });
 
 function tmpDbPath(): string {
@@ -126,7 +126,7 @@ describe("SessionTracker", () => {
 
     const sessions = inst.db.prepare("SELECT * FROM sessions").all() as any[];
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].agent).toBe("unknown");
+    expect(sessions[0].agent).toBe(process.env.MCP_AGENT || process.env.USER || "unknown");
 
     const memories = inst.db.prepare("SELECT * FROM memories WHERE source = 'session'").all() as any[];
     expect(memories).toHaveLength(1);
