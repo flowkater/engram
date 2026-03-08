@@ -303,8 +303,8 @@ async function main() {
     process.exit(0);
   }
 
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT").catch(console.error));
+  process.on("SIGTERM", () => shutdown("SIGTERM").catch(console.error));
 }
 
 main().catch((err) => {

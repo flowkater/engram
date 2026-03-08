@@ -7,10 +7,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { v7 as uuidv7 } from "uuid";
 import { chunkMarkdown, extractWikiLinks, type ChunkOptions, OBSIDIAN_CHUNK_OPTS, MEMORY_MD_CHUNK_OPTS } from "./chunker.js";
-import { embed, type EmbedderOptions } from "./embedder.js";
+import { embed, getCurrentModelName, type EmbedderOptions } from "./embedder.js";
 import { sha256 } from "../utils/hash.js";
 import { detectObsidianScope } from "../utils/scope.js";
+import { deleteRelatedRecords } from "../utils/delete-related.js";
 import pLimit from "p-limit";
+// NOTE: pLimit(3) here is independent of watcher.ts's Semaphore(3).
+// Watcher limits concurrent file processing; this limits concurrent embedding API calls within a single indexFile call.
+// They are complementary: watcher → max 3 files in parallel, each file → max 3 embed calls in parallel.
 
 const BATCH_SIZE = 5;
 
@@ -52,17 +56,13 @@ export function softDeleteByPath(db: Database.Database, sourcePath: string): num
   if (ids.length === 0) return 0;
 
   const idList = ids.map((r) => r.id);
-  const placeholders = idList.map(() => "?").join(",");
 
   return db.transaction(() => {
     const result = db.prepare(
       `UPDATE memories SET deleted = 1, updated_at = ? WHERE source_path = ? AND deleted = 0`
     ).run(now, sourcePath);
 
-    // Clean FTS, vec, and links
-    db.prepare(`DELETE FROM memory_fts WHERE id IN (${placeholders})`).run(...idList);
-    db.prepare(`DELETE FROM memory_vec WHERE id IN (${placeholders})`).run(...idList);
-    db.prepare(`DELETE FROM memory_links WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).run(...idList, ...idList);
+    deleteRelatedRecords(db, idList);
 
     return result.changes;
   })();
@@ -104,8 +104,8 @@ export async function indexFile(
 
   // Insert each chunk
   const insertMemory = db.prepare(`
-    INSERT INTO memories (id, content, summary, source, source_path, source_hash, chunk_index, scope, agent, tags, importance, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO memories (id, content, summary, source, source_path, source_hash, chunk_index, scope, agent, tags, importance, created_at, updated_at, embed_model)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertVec = db.prepare(
     "INSERT INTO memory_vec (id, embedding) VALUES (?, ?)"
@@ -137,9 +137,10 @@ export async function indexFile(
       const tags = JSON.stringify(chunk.meta.tags || []);
       const chunkScope = chunk.meta.scope || scope;
 
+      const embedModel = getCurrentModelName(opts.embedOpts);
       insertMemory.run(
         id, chunk.text, null, opts.source, relativePath, hash,
-        chunk.index, chunkScope, null, tags, importance, now, now
+        chunk.index, chunkScope, null, tags, importance, now, now, embedModel
       );
       insertVec.run(id, Buffer.from(embedding.buffer));
       insertFts.run(id, chunk.text, "", tags, chunkScope);

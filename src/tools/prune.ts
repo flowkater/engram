@@ -3,6 +3,7 @@
  * Dry-run mode by default for safety.
  */
 import type Database from "better-sqlite3";
+import { deleteRelatedRecords } from "../utils/delete-related.js";
 
 export interface PruneParams {
   olderThanDays?: number;
@@ -83,10 +84,7 @@ export function memoryPrune(
       ).run(now, ...ids);
       pruned = result.changes;
 
-      // Clean up FTS, vec, and links
-      db.prepare(`DELETE FROM memory_fts WHERE id IN (${placeholders})`).run(...ids);
-      db.prepare(`DELETE FROM memory_vec WHERE id IN (${placeholders})`).run(...ids);
-      db.prepare(`DELETE FROM memory_links WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).run(...ids, ...ids);
+      deleteRelatedRecords(db, ids);
     })();
   }
 

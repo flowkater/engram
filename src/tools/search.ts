@@ -35,7 +35,8 @@ export async function memorySearch(
   embedOpts?: EmbedderOptions
 ): Promise<MemoryResult[]> {
   const limit = params.limit || 10;
-  const fetchLimit = limit * 3;
+  // Fetch more candidates than needed to account for post-filtering (dedup, scope, deleted)
+  const fetchLimit = limit * 5;
   const minScore = params.minScore ?? 0.0;
 
   // Generate query embedding

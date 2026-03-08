@@ -36,6 +36,8 @@ interface ScopeConfig {
   obsidianScopeMap?: Record<string, string>;
 }
 
+// Config is cached for the lifetime of the process.
+// Changes to ~/.unified-memory/config.json require a server restart to take effect.
 let _cachedConfig: ScopeConfig | null = null;
 
 /**

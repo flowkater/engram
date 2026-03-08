@@ -42,6 +42,9 @@ class Semaphore {
   }
 }
 
+// NOTE: This Semaphore(3) limits concurrent file-level indexing.
+// It is independent of indexer.ts's pLimit(3) which limits concurrent embed API calls within a single file.
+// They are complementary and intentionally separate.
 const indexSemaphore = new Semaphore(3);
 
 /**

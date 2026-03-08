@@ -21,7 +21,7 @@ vi.mock("./embedder.js", () => {
     if (norm > 0) for (let i = 0; i < 768; i++) vec[i] /= norm;
     return Promise.resolve(vec);
   }
-  return { embed: fakeEmbed, EMBEDDING_DIM: 768 };
+  return { embed: fakeEmbed, EMBEDDING_DIM: 768, getCurrentModelName: () => "test-model" };
 });
 
 function tmpDbPath(): string {

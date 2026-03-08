@@ -121,8 +121,6 @@ export class SessionTracker {
     if (this.flushed || !this.session) return;
     if (this.session.activities.length < 1) return;
 
-    this.flushed = true;
-
     if (this.intervalHandle) {
       clearInterval(this.intervalHandle);
       this.intervalHandle = null;
@@ -144,6 +142,7 @@ export class SessionTracker {
         tags: ["auto-summary", "session"],
       });
 
+      this.flushed = true;
       this.log(
         `Session ${this.session.sessionId} auto-summarized after ${duration}`
       );
@@ -151,6 +150,29 @@ export class SessionTracker {
       this.log(
         `Session auto-summary failed: ${(err as Error).message}`
       );
+      // Dump session data to local file for recovery
+      try {
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        const logsDir = path.join(
+          process.env.HOME || "~",
+          ".unified-memory",
+          "logs"
+        );
+        fs.mkdirSync(logsDir, { recursive: true });
+        const dumpPath = path.join(
+          logsDir,
+          `session-dump-${Date.now()}.json`
+        );
+        fs.writeFileSync(dumpPath, JSON.stringify(this.session, null, 2));
+        this.log(`Session data dumped to ${dumpPath}`);
+      } catch (dumpErr) {
+        this.log(
+          `Session dump also failed: ${(dumpErr as Error).message}`
+        );
+      }
+      // Mark flushed to prevent retry loops
+      this.flushed = true;
     }
   }
 
