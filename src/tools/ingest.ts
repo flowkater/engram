@@ -47,8 +47,7 @@ export async function memoryIngest(
       }
     );
   } else {
-    const dirName = path.dirname(targetPath);
-    const relPath = path.basename(targetPath);
+    const relPath = path.resolve(targetPath);
     const result = await indexFile(db, targetPath, relPath, {
       source,
       scope: params.scope,
