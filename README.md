@@ -120,6 +120,7 @@ engram prune --days 180 --execute
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API URL |
 | `OLLAMA_MODEL` | `nomic-embed-text` | Embedding model |
 | `OPENAI_API_KEY` | — | Fallback embedding (optional) |
+| `ENGRAM_STRICT_LOCAL` | `true` | Block OpenAI fallback (set `false` to allow) |
 
 ## Development
 

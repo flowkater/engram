@@ -6,6 +6,7 @@
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "nomic-embed-text";
 const EMBEDDING_DIM = 768;
+const STRICT_LOCAL = (process.env.ENGRAM_STRICT_LOCAL ?? "true") !== "false";
 // nomic-embed-text context limit is 8192 tokens (~28,000 chars)
 const MAX_EMBED_CHARS = 28_000;
 
@@ -43,7 +44,7 @@ export async function embed(text: string, opts?: EmbedderOptions, withModel?: tr
     return withModel ? { embedding, model: `ollama/${model}` } : embedding;
   } catch (err) {
     const apiKey = opts?.openaiApiKey || process.env.OPENAI_API_KEY;
-    if (apiKey) {
+    if (apiKey && !STRICT_LOCAL) {
       console.warn("[embedder] Ollama failed, falling back to OpenAI:", (err as Error).message);
       const embedding = await embedOpenAI(truncatedText, apiKey);
       return withModel ? { embedding, model: "openai/text-embedding-3-small" } : embedding;
