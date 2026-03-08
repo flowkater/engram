@@ -13,15 +13,37 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 - **Graph Layer**: Wikilink/tag/scope-based relationships with 1-3 hop traversal
 - **Scope Isolation**: Project-scoped memories (todait-backend, blog, etc.)
 
-## Prerequisites
+## Quick Start (로컬 테스트)
 
 ```bash
-# Ollama with nomic-embed-text model
+# 1. Ollama 설치 & 임베딩 모델 다운로드
+brew install ollama        # macOS
+ollama serve &             # 백그라운드 실행
 ollama pull nomic-embed-text
+
+# 2. 프로젝트 빌드
+cd ~/.unified-memory
+npm install
+npm run build
+
+# 3. 테스트 실행 (Ollama 없이도 동작 — mock embedder)
+npm test                   # 81 tests expected
+
+# 4. Obsidian vault 인덱싱
+node dist/cli.js index ~/Obsidian/flowkater/flowkater --source obsidian
+
+# 5. MCP 서버 직접 실행 (stdio)
+node dist/server.js        # Ctrl+C로 종료
+
+# 6. 통계 확인
+node dist/cli.js stats
 ```
 
-- Node.js 22+
-- Ollama running locally
+## Prerequisites
+
+- **Node.js 22+**
+- **Ollama** running locally (`ollama serve`)
+- **nomic-embed-text** model (`ollama pull nomic-embed-text`)
 
 ## Installation
 
