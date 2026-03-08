@@ -48,11 +48,10 @@ describe("memory.ingest source_path normalization", () => {
     const rows = inst.db.prepare("SELECT source_path FROM memories WHERE deleted = 0").all() as Array<{ source_path: string }>;
     expect(rows.length).toBeGreaterThanOrEqual(1);
 
-    // source_path should NOT be just "note.md" (basename only)
-    // It should include the full absolute path for single file ingest
+    // source_path must be an absolute path matching the resolved file path
     for (const row of rows) {
-      expect(row.source_path).not.toBe("note.md");
-      expect(row.source_path).toContain("note.md");
+      expect(path.isAbsolute(row.source_path)).toBe(true);
+      expect(row.source_path).toBe(path.resolve(filePath));
     }
 
     // Verify embed_model is stored
