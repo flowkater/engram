@@ -4,6 +4,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
 import { memoryContext } from "./context.js";
+import { resetScopeConfigCache } from "../utils/scope.js";
+import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -20,13 +22,34 @@ function insertMemory(db: any, id: string, content: string, scope: string, impor
 
 describe("memory.context", () => {
   let inst: DatabaseInstance;
+  let originalHome: string | undefined;
+  let tmpHome: string;
 
   beforeEach(() => {
     inst = openDatabase(tmpDbPath());
+    // Set up scope config so tests don't depend on hardcoded defaults
+    originalHome = process.env.HOME;
+    tmpHome = path.join(os.tmpdir(), `um-ctx-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const engramDir = path.join(tmpHome, ".engram");
+    fs.mkdirSync(engramDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(engramDir, "config.json"),
+      JSON.stringify({
+        scopeMap: {
+          "todait-backend": "/workspace/todait/todait/todait-backend",
+          "todait-ios": "/workspace/todait/todait/todait-ios",
+        },
+      })
+    );
+    process.env.HOME = tmpHome;
+    resetScopeConfigCache();
   });
 
   afterEach(() => {
+    process.env.HOME = originalHome;
+    resetScopeConfigCache();
     inst.close();
+    fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
   it("detects scope from cwd and returns matching memories", () => {

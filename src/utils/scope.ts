@@ -6,30 +6,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
-/** Default cwd → scope mapping */
-const DEFAULT_SCOPE_MAP: Record<string, string> = {
-  "todait-backend": "/workspace/todait/todait/todait-backend",
-  "todait-ios": "/workspace/todait/todait/todait-ios",
-  "data-pipeline": "/Projects/data-pipeline",
-  "scrumble-backend": "/Projects/scrumble-backend",
-  blog: "/Projects/flowkater.io",
-  openclaw: "/.openclaw",
-  mentoring: "/Obsidian/flowkater/flowkater/Mentoring",
-};
+/** Default cwd → scope mapping (empty — configure via ~/.engram/config.json) */
+const DEFAULT_SCOPE_MAP: Record<string, string> = {};
 
-/** Default Obsidian relative path → scope mapping */
-const DEFAULT_OBSIDIAN_SCOPE_MAP: Record<string, string> = {
-  "Project/todait-backend-v2/": "todait-backend",
-  "Project/todait-ios/": "todait-ios",
-  "Project/data-pipeline/": "data-pipeline",
-  "Project/Todait/": "todait",
-  "Mentoring/": "mentoring",
-  "Blog/": "blog",
-  "Study/": "study",
-  "Daily/": "daily",
-  "투데잇/": "todait",
-  "_ontology/": "ontology",
-};
+/** Default Obsidian relative path → scope mapping (empty — configure via ~/.engram/config.json) */
+const DEFAULT_OBSIDIAN_SCOPE_MAP: Record<string, string> = {};
 
 interface ScopeConfig {
   scopeMap?: Record<string, string>;

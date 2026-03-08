@@ -111,6 +111,19 @@ engram prune --days 180 --execute
 | `memory.health` | Check DB integrity (orphans, model mismatch) |
 | `memory.restore` | Restore soft-deleted memory with re-embedding |
 
+## Scope Configuration
+
+Scope detection is configured via `~/.engram/config.json`. Without this file, all memories default to `"global"` scope.
+
+```bash
+# Copy the example and customize
+cp config.example.json ~/.engram/config.json
+```
+
+See `config.example.json` for the full format with `scopeMap` (cwd → scope) and `obsidianScopeMap` (Obsidian path prefix → scope).
+
+> **Migration warning**: If you re-index without a `config.json`, all new memories will get `"global"` scope, causing mismatch with previously scoped data. Create `~/.engram/config.json` before re-indexing.
+
 ## Environment Variables
 
 | Variable | Default | Description |
