@@ -124,6 +124,15 @@ See `config.example.json` for the full format with `scopeMap` (cwd → scope) an
 
 > **Migration warning**: If you re-index without a `config.json`, all new memories will get `"global"` scope, causing mismatch with previously scoped data. Create `~/.engram/config.json` before re-indexing.
 
+## minScore Guide
+
+The `minScore` parameter in `memory.search` uses a **0~1 normalized scale** where 1.0 = best match in the result set.
+
+- Scores are normalized per-query: the top result always gets 1.0
+- A single result always scores 1.0 (no quality comparison possible)
+- If all results have identical RRF scores, they all get 1.0 (no differentiation possible)
+- Recommended: `minScore: 0.3` for loose filtering, `minScore: 0.7` for strict
+
 ## Environment Variables
 
 | Variable | Default | Description |

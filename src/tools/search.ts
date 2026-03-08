@@ -145,6 +145,14 @@ export async function memorySearch(
 
   if (merged.length === 0) return [];
 
+  // Normalize scores to 0~1 (max score = 1.0)
+  const maxScore = merged[0].score;
+  if (maxScore > 0) {
+    for (const item of merged) {
+      item.score = item.score / maxScore;
+    }
+  }
+
   // Filter by minScore
   const filtered = merged.filter((r) => r.score >= minScore);
 

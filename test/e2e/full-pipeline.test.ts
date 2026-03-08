@@ -65,7 +65,6 @@ describe("E2E Full Pipeline", () => {
     await memoryIngest(inst.db, {
       path: FIXTURE_VAULT,
       source: "obsidian",
-      recursive: true,
     });
   }, 60000);
 
@@ -169,7 +168,39 @@ describe("E2E Full Pipeline", () => {
     expect(stillThere).toBe(false);
   });
 
-  it("6. health tool reports no integrity issues", () => {
+  it("6. vec-only results normalize correctly", async () => {
+    // Search for something that matches vec but unlikely FTS exact match
+    const results = await memorySearch(inst.db, {
+      query: "software architecture patterns design",
+      limit: 5,
+    });
+
+    if (results.length > 0) {
+      expect(results[0].score).toBe(1.0);
+      for (const r of results) {
+        expect(r.score).toBeGreaterThan(0);
+        expect(r.score).toBeLessThanOrEqual(1.0);
+      }
+    }
+  });
+
+  it("7. FTS-heavy search normalizes correctly", async () => {
+    // Search with exact keyword that FTS should match
+    const results = await memorySearch(inst.db, {
+      query: "goroutine",
+      limit: 5,
+    });
+
+    if (results.length > 0) {
+      expect(results[0].score).toBe(1.0);
+      for (const r of results) {
+        expect(r.score).toBeGreaterThan(0);
+        expect(r.score).toBeLessThanOrEqual(1.0);
+      }
+    }
+  });
+
+  it("8. health tool reports no integrity issues", () => {
     const health = memoryHealth(inst.db);
 
     expect(health.orphanedMemories).toBe(0);

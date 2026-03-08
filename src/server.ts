@@ -115,7 +115,7 @@ server.tool(
     limit: z.number().optional().describe("Max results (default 10)"),
     source: z.enum(["obsidian", "session", "manual", "notion", "memory-md"]).optional().describe("Source filter"),
     agent: z.string().optional().describe("Agent filter"),
-    minScore: z.number().optional().describe("Minimum relevance score (0-1)"),
+    minScore: z.number().optional().describe("Minimum relevance score (0~1 normalized, where 1.0 = best match). Default: 0"),
   },
   async ({ query, scope, limit, source, agent, minScore }) => {
     try {
