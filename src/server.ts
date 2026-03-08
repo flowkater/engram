@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Engram MCP Server — stdio transport entry point.
- * Registers all 8 memory tools.
+ * Registers all 10 memory tools.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -181,12 +181,11 @@ server.tool(
     path: z.string().describe("File or directory path"),
     source: z.enum(["obsidian", "manual", "memory-md"]).optional().describe("Source type (default: manual)"),
     scope: z.string().optional().describe("Project scope"),
-    recursive: z.boolean().optional().describe("Recurse into subdirectories (default: true)"),
   },
-  async ({ path: targetPath, source, scope, recursive }) => {
+  async ({ path: targetPath, source, scope }) => {
     try {
-      sessionTracker.recordActivity("memory.ingest", { path: targetPath, source, scope, recursive });
-      const result = await memoryIngest(db, { path: targetPath, source, scope, recursive });
+      sessionTracker.recordActivity("memory.ingest", { path: targetPath, source, scope });
+      const result = await memoryIngest(db, { path: targetPath, source, scope });
       return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     } catch (err) {
       return errorResponse("memory.ingest", err);

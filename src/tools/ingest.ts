@@ -11,7 +11,6 @@ export interface IngestParams {
   path: string;
   source?: "obsidian" | "manual" | "memory-md";
   scope?: string;
-  recursive?: boolean;
 }
 
 export interface IngestResult {
@@ -31,7 +30,6 @@ export async function memoryIngest(
 ): Promise<IngestResult> {
   const targetPath = params.path.replace(/^~/, process.env.HOME || "");
   const source = params.source || "manual";
-  const recursive = params.recursive ?? true;
 
   const stat = fs.statSync(targetPath);
 

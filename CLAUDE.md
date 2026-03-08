@@ -12,7 +12,7 @@ Engram: 로컬 AI 에이전트 메모리 MCP 서버. SQLite + sqlite-vec + FTS5 
 
 ## 테스트
 ```bash
-npm test          # Vitest 실행 (현재 108 tests, 18 files)
+npm test          # Vitest 실행 (현재 113 tests, 20 files)
 npx tsc --noEmit  # 타입 체크
 npm run build     # 빌드
 ```

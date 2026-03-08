@@ -5,7 +5,7 @@ Review by: 2026-06-08
 ---
 
 ## Rule: 테스트 선행 커밋
-- **Why**: 108개 테스트 기반 안정성 유지. 깨진 테스트로 커밋 시 다른 에이전트 작업 차단
+- **Why**: 113개 테스트 기반 안정성 유지. 깨진 테스트로 커밋 시 다른 에이전트 작업 차단
 - **Enforcement**: `npm test` 전체 통과 확인 후에만 `git commit`. 실패 시 커밋 금지
 - **Scope**: 모든 소스 변경 (`src/**`, `test/**`)
 
@@ -41,5 +41,5 @@ Review by: 2026-06-08
 
 ## Rule: scope 매핑은 config.json 외부화
 - **Why**: 하드코딩 경로는 환경 종속. config.json으로 외부화하여 재사용성 확보
-- **Enforcement**: `src/utils/scope.ts`에 경로 하드코딩 금지. `~/.engram/config.json`에서 로드
+- **Enforcement**: `~/.engram/config.json`에서 우선 로드, 없으면 DEFAULT_*_MAP 폴백 사용. 새 경로 추가는 config.json에만
 - **Scope**: `src/utils/scope.ts`
