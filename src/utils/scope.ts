@@ -1,9 +1,13 @@
 /**
  * Scope detection — maps cwd or Obsidian paths to project scopes.
+ * Loads scope map from ~/.unified-memory/config.json if available,
+ * falls back to built-in defaults.
  */
+import fs from "node:fs";
+import path from "node:path";
 
-/** cwd → scope mapping */
-const SCOPE_MAP: Record<string, string> = {
+/** Default cwd → scope mapping */
+const DEFAULT_SCOPE_MAP: Record<string, string> = {
   "todait-backend": "/workspace/todait/todait/todait-backend",
   "todait-ios": "/workspace/todait/todait/todait-ios",
   "data-pipeline": "/Projects/data-pipeline",
@@ -13,8 +17,8 @@ const SCOPE_MAP: Record<string, string> = {
   mentoring: "/Obsidian/flowkater/flowkater/Mentoring",
 };
 
-/** Obsidian relative path → scope mapping */
-const OBSIDIAN_SCOPE_MAP: Record<string, string> = {
+/** Default Obsidian relative path → scope mapping */
+const DEFAULT_OBSIDIAN_SCOPE_MAP: Record<string, string> = {
   "Project/todait-backend-v2/": "todait-backend",
   "Project/todait-ios/": "todait-ios",
   "Project/data-pipeline/": "data-pipeline",
@@ -27,11 +31,54 @@ const OBSIDIAN_SCOPE_MAP: Record<string, string> = {
   "_ontology/": "ontology",
 };
 
+interface ScopeConfig {
+  scopeMap?: Record<string, string>;
+  obsidianScopeMap?: Record<string, string>;
+}
+
+let _cachedConfig: ScopeConfig | null = null;
+
+/**
+ * Load scope configuration from ~/.unified-memory/config.json.
+ * Returns defaults if config file doesn't exist or is invalid.
+ */
+function loadConfig(): ScopeConfig {
+  if (_cachedConfig) return _cachedConfig;
+
+  const configPath = path.join(
+    process.env.HOME || "~",
+    ".unified-memory",
+    "config.json"
+  );
+
+  try {
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as ScopeConfig;
+      _cachedConfig = parsed;
+      return parsed;
+    }
+  } catch {
+    // Invalid config — fall back to defaults
+  }
+
+  _cachedConfig = {};
+  return _cachedConfig;
+}
+
+/** Reset cached config (for testing). */
+export function resetScopeConfigCache(): void {
+  _cachedConfig = null;
+}
+
 /**
  * Detect scope from a working directory path.
  */
 export function detectScope(cwd: string): string {
-  for (const [scope, pathFragment] of Object.entries(SCOPE_MAP)) {
+  const config = loadConfig();
+  const scopeMap = config.scopeMap || DEFAULT_SCOPE_MAP;
+
+  for (const [scope, pathFragment] of Object.entries(scopeMap)) {
     if (cwd.includes(pathFragment)) return scope;
   }
   return "global";
@@ -41,7 +88,10 @@ export function detectScope(cwd: string): string {
  * Detect scope from an Obsidian vault-relative file path.
  */
 export function detectObsidianScope(relativePath: string): string {
-  for (const [prefix, scope] of Object.entries(OBSIDIAN_SCOPE_MAP)) {
+  const config = loadConfig();
+  const obsidianScopeMap = config.obsidianScopeMap || DEFAULT_OBSIDIAN_SCOPE_MAP;
+
+  for (const [prefix, scope] of Object.entries(obsidianScopeMap)) {
     if (relativePath.startsWith(prefix)) return scope;
   }
   return "global";

@@ -17,17 +17,26 @@ export interface EmbedderOptions {
  * Embed text using Ollama's nomic-embed-text model.
  * Falls back to OpenAI text-embedding-3-small if Ollama is unavailable and OPENAI_API_KEY is set.
  */
-export async function embed(text: string, opts?: EmbedderOptions): Promise<Float32Array> {
+export interface EmbedResult {
+  embedding: Float32Array;
+  model: string;
+}
+
+export async function embed(text: string, opts?: EmbedderOptions): Promise<Float32Array>;
+export async function embed(text: string, opts: EmbedderOptions | undefined, withModel: true): Promise<EmbedResult>;
+export async function embed(text: string, opts?: EmbedderOptions, withModel?: true): Promise<Float32Array | EmbedResult> {
   const baseUrl = opts?.ollamaBaseUrl || OLLAMA_BASE_URL;
   const model = opts?.ollamaModel || OLLAMA_MODEL;
 
   try {
-    return await embedOllama(text, baseUrl, model);
+    const embedding = await embedOllama(text, baseUrl, model);
+    return withModel ? { embedding, model: `ollama/${model}` } : embedding;
   } catch (err) {
     const apiKey = opts?.openaiApiKey || process.env.OPENAI_API_KEY;
     if (apiKey) {
       console.warn("[embedder] Ollama failed, falling back to OpenAI:", (err as Error).message);
-      return await embedOpenAI(text, apiKey);
+      const embedding = await embedOpenAI(text, apiKey);
+      return withModel ? { embedding, model: "openai/text-embedding-3-small" } : embedding;
     }
     throw new Error(
       `Embedding failed: Ollama unavailable (${(err as Error).message}) and no OPENAI_API_KEY set`
@@ -35,25 +44,49 @@ export async function embed(text: string, opts?: EmbedderOptions): Promise<Float
   }
 }
 
+/**
+ * Get the current embedding model name (for mismatch detection).
+ */
+export function getCurrentModelName(opts?: EmbedderOptions): string {
+  return `ollama/${opts?.ollamaModel || OLLAMA_MODEL}`;
+}
+
 async function embedOllama(text: string, baseUrl: string, model: string): Promise<Float32Array> {
-  const res = await fetch(`${baseUrl}/api/embeddings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, prompt: text }),
-  });
+  const TIMEOUT_MS = 30_000;
+  const MAX_RETRIES = 1;
 
-  if (!res.ok) {
-    throw new Error(`Ollama API error: ${res.status} ${res.statusText}`);
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`${baseUrl}/api/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, prompt: text }),
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Ollama API error: ${res.status} ${res.statusText}`);
+      }
+
+      const data = (await res.json()) as { embedding: number[] };
+      if (!data.embedding || data.embedding.length !== EMBEDDING_DIM) {
+        throw new Error(
+          `Unexpected embedding dimension: got ${data.embedding?.length}, expected ${EMBEDDING_DIM}`
+        );
+      }
+
+      return new Float32Array(data.embedding);
+    } catch (err) {
+      lastError = err as Error;
+      if (attempt < MAX_RETRIES) {
+        console.warn(`[embedder] Ollama attempt ${attempt + 1} failed: ${lastError.message}, retrying in 1s...`);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
   }
 
-  const data = (await res.json()) as { embedding: number[] };
-  if (!data.embedding || data.embedding.length !== EMBEDDING_DIM) {
-    throw new Error(
-      `Unexpected embedding dimension: got ${data.embedding?.length}, expected ${EMBEDDING_DIM}`
-    );
-  }
-
-  return new Float32Array(data.embedding);
+  throw lastError!;
 }
 
 async function embedOpenAI(text: string, apiKey: string): Promise<Float32Array> {

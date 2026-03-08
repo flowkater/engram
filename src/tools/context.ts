@@ -37,9 +37,9 @@ export function memoryContext(
   const limit = params.limit || 5;
   const recent = params.recent ?? true;
 
-  // Build query: scope-filtered, ordered by recency + importance
+  // Build query: scope-filtered, ordered by weighted score (importance * 0.4 + recency * 0.6)
   const orderBy = recent
-    ? "importance DESC, created_at DESC"
+    ? "(importance * 0.4 + (1.0 - MIN(1.0, (julianday('now') - julianday(created_at)) / 30.0)) * 0.6) DESC"
     : "importance DESC";
 
   const rows = db.prepare(`

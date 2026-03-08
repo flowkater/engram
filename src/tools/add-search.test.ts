@@ -29,6 +29,7 @@ vi.mock("../core/embedder.js", () => {
   return {
     embed: fakeEmbed,
     EMBEDDING_DIM: 768,
+    getCurrentModelName: () => "test/fake-model",
   };
 });
 

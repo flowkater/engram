@@ -42,18 +42,18 @@ export async function memorySearch(
   const queryEmbedding = await embed(params.query, embedOpts);
 
   // Build scope/source/agent filter conditions for SQL
-  const filterConditions: string[] = ["m.deleted = 0"];
+  const filterConditions: string[] = ["deleted = 0"];
   const filterParams: unknown[] = [];
   if (params.scope) {
-    filterConditions.push("m.scope = ?");
+    filterConditions.push("scope = ?");
     filterParams.push(params.scope);
   }
   if (params.source) {
-    filterConditions.push("m.source = ?");
+    filterConditions.push("source = ?");
     filterParams.push(params.source);
   }
   if (params.agent) {
-    filterConditions.push("m.agent = ?");
+    filterConditions.push("agent = ?");
     filterParams.push(params.agent);
   }
   const whereClause = filterConditions.join(" AND ");

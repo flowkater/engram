@@ -10,8 +10,9 @@ import { chunkMarkdown, extractWikiLinks, type ChunkOptions, OBSIDIAN_CHUNK_OPTS
 import { embed, type EmbedderOptions } from "./embedder.js";
 import { sha256 } from "../utils/hash.js";
 import { detectObsidianScope } from "../utils/scope.js";
+import pLimit from "p-limit";
 
-const BATCH_SIZE = 20;
+const BATCH_SIZE = 5;
 
 export interface IndexFileOptions {
   source: "obsidian" | "manual" | "memory-md";
@@ -41,10 +42,30 @@ export function isAlreadyIndexed(db: Database.Database, sourcePath: string, hash
  * Soft-delete all memory chunks for a given source path.
  */
 export function softDeleteByPath(db: Database.Database, sourcePath: string): number {
-  const result = db.prepare(
-    "UPDATE memories SET deleted = 1, updated_at = ? WHERE source_path = ? AND deleted = 0"
-  ).run(new Date().toISOString(), sourcePath);
-  return result.changes;
+  const now = new Date().toISOString();
+
+  // Get IDs to delete from FTS/vec/links
+  const ids = db.prepare(
+    "SELECT id FROM memories WHERE source_path = ? AND deleted = 0"
+  ).all(sourcePath) as Array<{ id: string }>;
+
+  if (ids.length === 0) return 0;
+
+  const idList = ids.map((r) => r.id);
+  const placeholders = idList.map(() => "?").join(",");
+
+  return db.transaction(() => {
+    const result = db.prepare(
+      `UPDATE memories SET deleted = 1, updated_at = ? WHERE source_path = ? AND deleted = 0`
+    ).run(now, sourcePath);
+
+    // Clean FTS, vec, and links
+    db.prepare(`DELETE FROM memory_fts WHERE id IN (${placeholders})`).run(...idList);
+    db.prepare(`DELETE FROM memory_vec WHERE id IN (${placeholders})`).run(...idList);
+    db.prepare(`DELETE FROM memory_links WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).run(...idList, ...idList);
+
+    return result.changes;
+  })();
 }
 
 /**
@@ -64,7 +85,7 @@ export async function indexFile(
     return { file: relativePath, chunks: 0, skipped: true };
   }
 
-  // Remove old chunks for this file
+  // Remove old chunks for this file (including FTS/vec/links)
   softDeleteByPath(db, relativePath);
 
   // Determine chunk options
@@ -99,52 +120,61 @@ export async function indexFile(
 
   const chunkIds: string[] = [];
 
+  // Pre-compute embeddings outside transaction (network I/O)
+  const embeddings: Float32Array[] = [];
   for (const chunk of chunks) {
-    const id = uuidv7();
-    const now = new Date().toISOString();
-    const tags = JSON.stringify(chunk.meta.tags || []);
-    const chunkScope = chunk.meta.scope || scope;
-
-    // Generate embedding
     const embedding = await embed(chunk.text, opts.embedOpts);
-
-    insertMemory.run(
-      id, chunk.text, null, opts.source, relativePath, hash,
-      chunk.index, chunkScope, null, tags, importance, now, now
-    );
-    insertVec.run(id, Buffer.from(embedding.buffer));
-    insertFts.run(id, chunk.text, "", tags, chunkScope);
-    chunkIds.push(id);
-
-    // Extract wikilinks and create link records to existing memories
-    const wikiLinks = extractWikiLinks(chunk.text);
-    for (const linkName of wikiLinks) {
-      // Find target memory by source_path matching the link name
-      const targets = db.prepare(
-        "SELECT DISTINCT id FROM memories WHERE source_path LIKE ? AND deleted = 0 LIMIT 5"
-      ).all(`%${linkName}%`) as Array<{ id: string }>;
-
-      for (const target of targets) {
-        if (target.id !== id) {
-          insertLink.run(id, target.id, "wikilink", 1.0, new Date().toISOString());
-        }
-      }
-    }
-
-    // Create tag-based links to other memories with same tags
-    const chunkTags = chunk.meta.tags || [];
-    if (chunkTags.length > 0) {
-      for (const tag of chunkTags) {
-        const tagMatches = db.prepare(
-          "SELECT id FROM memories WHERE tags LIKE ? AND id != ? AND deleted = 0 LIMIT 10"
-        ).all(`%${tag}%`, id) as Array<{ id: string }>;
-
-        for (const match of tagMatches) {
-          insertLink.run(id, match.id, "tag", 0.5, new Date().toISOString());
-        }
-      }
-    }
+    embeddings.push(embedding);
   }
+
+  // Atomic insert of all chunks
+  db.transaction(() => {
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const embedding = embeddings[ci];
+      const id = uuidv7();
+      const now = new Date().toISOString();
+      const tags = JSON.stringify(chunk.meta.tags || []);
+      const chunkScope = chunk.meta.scope || scope;
+
+      insertMemory.run(
+        id, chunk.text, null, opts.source, relativePath, hash,
+        chunk.index, chunkScope, null, tags, importance, now, now
+      );
+      insertVec.run(id, Buffer.from(embedding.buffer));
+      insertFts.run(id, chunk.text, "", tags, chunkScope);
+      chunkIds.push(id);
+
+      // Extract wikilinks and create link records to existing memories
+      const wikiLinks = extractWikiLinks(chunk.text);
+      for (const linkName of wikiLinks) {
+        // Exact filename match: "name.md" or "*/name.md"
+        const targets = db.prepare(
+          "SELECT DISTINCT id FROM memories WHERE deleted = 0 AND (source_path = ? OR source_path LIKE ?) LIMIT 5"
+        ).all(`${linkName}.md`, `%/${linkName}.md`) as Array<{ id: string }>;
+
+        for (const target of targets) {
+          if (target.id !== id) {
+            insertLink.run(id, target.id, "wikilink", 1.0, new Date().toISOString());
+          }
+        }
+      }
+
+      // Create tag-based links to other memories with same tags
+      const chunkTags = chunk.meta.tags || [];
+      if (chunkTags.length > 0) {
+        for (const tag of chunkTags) {
+          const tagMatches = db.prepare(
+            "SELECT id FROM memories WHERE tags LIKE ? AND id != ? AND deleted = 0 LIMIT 10"
+          ).all(`%${tag}%`, id) as Array<{ id: string }>;
+
+          for (const match of tagMatches) {
+            insertLink.run(id, match.id, "tag", 0.5, new Date().toISOString());
+          }
+        }
+      }
+    }
+  })();
 
   return { file: relativePath, chunks: chunks.length, skipped: false };
 }
@@ -165,11 +195,14 @@ export async function indexDirectory(
   for (let i = 0; i < files.length; i += BATCH_SIZE) {
     const batch = files.slice(i, i + BATCH_SIZE);
 
+    const limit = pLimit(3);
     const batchResults = await Promise.all(
-      batch.map((file) => {
-        const fullPath = path.join(dirPath, file);
-        return indexFile(db, fullPath, file, opts);
-      })
+      batch.map((file) =>
+        limit(() => {
+          const fullPath = path.join(dirPath, file);
+          return indexFile(db, fullPath, file, opts);
+        })
+      )
     );
 
     results.push(...batchResults);

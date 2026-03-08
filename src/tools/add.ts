@@ -3,7 +3,7 @@
  */
 import type Database from "better-sqlite3";
 import { v7 as uuidv7 } from "uuid";
-import { embed, type EmbedderOptions } from "../core/embedder.js";
+import { embed, getCurrentModelName, type EmbedderOptions } from "../core/embedder.js";
 
 export interface AddParams {
   content: string;
@@ -36,26 +36,26 @@ export async function memoryAdd(
   const importance = params.importance ?? 0.5;
   const source = params.source || "manual";
 
-  // Generate embedding
+  // Generate embedding (outside transaction — network I/O)
   const embedding = await embed(params.content, embedOpts);
 
-  // Insert into memories table
-  db.prepare(`
-    INSERT INTO memories (id, content, summary, source, scope, agent, tags, importance, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, params.content, params.summary || null, source, scope, params.agent || null, tags, importance, now, now);
+  // Atomic insert: memories + vec + FTS
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO memories (id, content, summary, source, scope, agent, tags, importance, created_at, updated_at, embed_model)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, params.content, params.summary || null, source, scope, params.agent || null, tags, importance, now, now, getCurrentModelName(embedOpts));
 
-  // Insert into vector index
-  db.prepare(`
-    INSERT INTO memory_vec (id, embedding)
-    VALUES (?, ?)
-  `).run(id, Buffer.from(embedding.buffer));
+    db.prepare(`
+      INSERT INTO memory_vec (id, embedding)
+      VALUES (?, ?)
+    `).run(id, Buffer.from(embedding.buffer));
 
-  // Insert into FTS index
-  db.prepare(`
-    INSERT INTO memory_fts (id, content, summary, tags, scope)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(id, params.content, params.summary || "", tags, scope);
+    db.prepare(`
+      INSERT INTO memory_fts (id, content, summary, tags, scope)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, params.content, params.summary || "", tags, scope);
+  })();
 
   return { id, scope, created_at: now };
 }

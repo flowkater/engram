@@ -199,3 +199,50 @@ describe("estimateTokens", () => {
     expect(estimateTokens("a".repeat(100))).toBe(25);
   });
 });
+
+describe("parseFrontmatter (gray-matter edge cases)", () => {
+  it("handles multi-line tags list", () => {
+    const content = `---
+tags:
+  - swift
+  - ios
+  - "#todait"
+title: Test Note
+---
+Body text`;
+    const { meta, body } = parseFrontmatter(content);
+    expect(meta.tags).toEqual(["swift", "ios", "todait"]);
+    expect(meta.title).toBe("Test Note");
+    expect(body.trim()).toBe("Body text");
+  });
+
+  it("handles nested YAML and quoted colons", () => {
+    const content = `---
+title: "Note: Important"
+scope: todait
+extra:
+  key: value
+---
+Body`;
+    const { meta, body } = parseFrontmatter(content);
+    expect(meta.title).toBe("Note: Important");
+    expect(meta.scope).toBe("todait");
+    expect(meta.extra).toEqual({ key: "value" });
+    expect(body.trim()).toBe("Body");
+  });
+
+  it("handles inline tags array with quotes", () => {
+    const content = `---
+tags: ["swift", "ios"]
+---
+Body`;
+    const { meta } = parseFrontmatter(content);
+    expect(meta.tags).toEqual(["swift", "ios"]);
+  });
+
+  it("handles no frontmatter", () => {
+    const { meta, body } = parseFrontmatter("Just body text");
+    expect(meta.tags).toBeUndefined();
+    expect(body).toBe("Just body text");
+  });
+});

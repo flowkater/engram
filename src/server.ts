@@ -9,6 +9,7 @@ import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs";
 import { openDatabase } from "./core/database.js";
+import { getCurrentModelName } from "./core/embedder.js";
 import { memoryAdd } from "./tools/add.js";
 import { memorySearch } from "./tools/search.js";
 import { memoryContext } from "./tools/context.js";
@@ -53,6 +54,19 @@ try {
   process.exit(1);
 }
 const db = dbInstance.db;
+
+// Check for embedding model mismatch
+{
+  const currentModel = getCurrentModelName();
+  const existing = db.prepare(
+    "SELECT DISTINCT embed_model FROM memories WHERE embed_model IS NOT NULL AND deleted = 0 LIMIT 10"
+  ).all() as Array<{ embed_model: string }>;
+  const mismatched = existing.filter((r) => r.embed_model !== currentModel);
+  if (mismatched.length > 0) {
+    const models = mismatched.map((r) => r.embed_model).join(", ");
+    log(`⚠️  Embedding model mismatch detected! Current: ${currentModel}, existing records use: ${models}. Consider re-indexing for consistent similarity search.`);
+  }
+}
 
 const server = new McpServer({
   name: "unified-memory",
@@ -246,27 +260,20 @@ async function main() {
   // Start session tracker
   sessionTracker.start();
 
+  // Track resources for unified shutdown
+  let watcher: Awaited<ReturnType<typeof startWatcher>> | null = null;
+  let scheduler: ReturnType<typeof startScheduler> | null = null;
+
   // Start file watcher if vault exists
   if (fs.existsSync(VAULT_PATH)) {
     try {
-      const watcher = startWatcher(db, {
+      watcher = startWatcher(db, {
         vaultPath: VAULT_PATH,
         onIndexed: (file, chunks) => log(`Indexed ${file} (${chunks} chunks)`),
         onDeleted: (file) => log(`Soft-deleted ${file}`),
         onError: (err) => log(`Watcher error: ${err.message}`),
       });
       log(`Watching vault: ${VAULT_PATH}`);
-
-      process.on("SIGINT", async () => {
-        await watcher.close();
-        dbInstance.close();
-        process.exit(0);
-      });
-      process.on("SIGTERM", async () => {
-        await watcher.close();
-        dbInstance.close();
-        process.exit(0);
-      });
     } catch (err) {
       log(`Warning: Could not start watcher: ${(err as Error).message}`);
     }
@@ -276,29 +283,31 @@ async function main() {
 
   // Start scheduler
   try {
-    const scheduler = startScheduler(db, {
+    scheduler = startScheduler(db, {
       onLog: (msg) => log(msg),
     });
-    process.on("SIGINT", () => scheduler.stop());
-    process.on("SIGTERM", () => scheduler.stop());
   } catch (err) {
     log(`Warning: Could not start scheduler: ${(err as Error).message}`);
   }
+
+  // Unified shutdown handler
+  let shutdownOnce = false;
+  async function shutdown(signal: string) {
+    if (shutdownOnce) return;
+    shutdownOnce = true;
+    log(`Received ${signal}, shutting down...`);
+    try { await sessionTracker.flush(); } catch (e) { log(`sessionTracker.flush error: ${(e as Error).message}`); }
+    try { if (watcher) await watcher.close(); } catch (e) { log(`watcher.close error: ${(e as Error).message}`); }
+    try { if (scheduler) scheduler.stop(); } catch (e) { log(`scheduler.stop error: ${(e as Error).message}`); }
+    try { dbInstance.close(); } catch (e) { log(`db.close error: ${(e as Error).message}`); }
+    process.exit(0);
+  }
+
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
 main().catch((err) => {
   log(`Fatal error: ${err.message}`);
   process.exit(1);
-});
-
-// Fallback graceful shutdown
-process.on("SIGINT", async () => {
-  await sessionTracker.flush();
-  dbInstance.close();
-  process.exit(0);
-});
-process.on("SIGTERM", async () => {
-  await sessionTracker.flush();
-  dbInstance.close();
-  process.exit(0);
 });

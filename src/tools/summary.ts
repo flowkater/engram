@@ -3,7 +3,7 @@
  */
 import type Database from "better-sqlite3";
 import { v7 as uuidv7 } from "uuid";
-import { embed, type EmbedderOptions } from "../core/embedder.js";
+import { embed, getCurrentModelName, type EmbedderOptions } from "../core/embedder.js";
 
 export interface SummaryParams {
   summary: string;
@@ -34,40 +34,40 @@ export async function memorySummary(
   const now = new Date().toISOString();
   const tags = JSON.stringify(params.tags || ["session-summary"]);
 
-  // Generate embedding for the summary
+  // Generate embedding (outside transaction — network I/O)
   const embedding = await embed(params.summary, embedOpts);
 
-  // Insert memory
-  db.prepare(`
-    INSERT INTO memories (id, content, summary, source, scope, agent, tags, importance, created_at, updated_at)
-    VALUES (?, ?, ?, 'session', ?, ?, ?, 0.7, ?, ?)
-  `).run(memoryId, params.summary, params.summary, scope, params.agent || null, tags, now, now);
-
-  // Insert vector
-  db.prepare("INSERT INTO memory_vec (id, embedding) VALUES (?, ?)").run(
-    memoryId,
-    Buffer.from(embedding.buffer)
-  );
-
-  // Insert FTS
-  db.prepare("INSERT INTO memory_fts (id, content, summary, tags, scope) VALUES (?, ?, ?, ?, ?)").run(
-    memoryId, params.summary, params.summary, tags, scope
-  );
-
-  // Upsert session record
-  const existingSession = db.prepare("SELECT id FROM sessions WHERE id = ?").get(sessionId);
-  if (existingSession) {
+  // Atomic insert: memory + vec + FTS + session upsert
+  db.transaction(() => {
     db.prepare(`
-      UPDATE sessions SET ended_at = ?, summary = ?,
-        memory_ids = json_insert(memory_ids, '$[#]', ?)
-      WHERE id = ?
-    `).run(now, params.summary, memoryId, sessionId);
-  } else {
-    db.prepare(`
-      INSERT INTO sessions (id, agent, scope, started_at, ended_at, summary, memory_ids)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(sessionId, params.agent || "unknown", scope, now, now, params.summary, JSON.stringify([memoryId]));
-  }
+      INSERT INTO memories (id, content, summary, source, scope, agent, tags, importance, created_at, updated_at, embed_model)
+      VALUES (?, ?, ?, 'session', ?, ?, ?, 0.7, ?, ?, ?)
+    `).run(memoryId, params.summary, params.summary, scope, params.agent || null, tags, now, now, getCurrentModelName(embedOpts));
+
+    db.prepare("INSERT INTO memory_vec (id, embedding) VALUES (?, ?)").run(
+      memoryId,
+      Buffer.from(embedding.buffer)
+    );
+
+    db.prepare("INSERT INTO memory_fts (id, content, summary, tags, scope) VALUES (?, ?, ?, ?, ?)").run(
+      memoryId, params.summary, params.summary, tags, scope
+    );
+
+    // Upsert session record
+    const existingSession = db.prepare("SELECT id FROM sessions WHERE id = ?").get(sessionId);
+    if (existingSession) {
+      db.prepare(`
+        UPDATE sessions SET ended_at = ?, summary = ?,
+          memory_ids = json_insert(memory_ids, '$[#]', ?)
+        WHERE id = ?
+      `).run(now, params.summary, memoryId, sessionId);
+    } else {
+      db.prepare(`
+        INSERT INTO sessions (id, agent, scope, started_at, ended_at, summary, memory_ids)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(sessionId, params.agent || "unknown", scope, now, now, params.summary, JSON.stringify([memoryId]));
+    }
+  })();
 
   return {
     memoryId,

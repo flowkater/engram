@@ -130,6 +130,12 @@ export function openDatabase(dbPath: string = DEFAULT_DB_PATH): DatabaseInstance
   initVec(db);
   initFts(db);
 
+  // Add embed_model column if not present (migration)
+  const cols = db.pragma("table_info(memories)") as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "embed_model")) {
+    db.exec("ALTER TABLE memories ADD COLUMN embed_model TEXT");
+  }
+
   return {
     db,
     close() {
