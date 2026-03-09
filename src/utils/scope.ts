@@ -41,8 +41,8 @@ function loadConfig(): ScopeConfig {
       _cachedConfig = parsed;
       return parsed;
     }
-  } catch {
-    // Invalid config — fall back to defaults
+  } catch (err) {
+    console.warn(`[scope] Failed to parse config.json: ${(err as Error).message}`);
   }
 
   _cachedConfig = {};
