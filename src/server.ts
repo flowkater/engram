@@ -22,6 +22,7 @@ import { memoryRestore } from "./tools/restore.js";
 import { startWatcher, diffScan } from "./core/watcher.js";
 import { startScheduler } from "./core/scheduler.js";
 import { SessionTracker } from "./core/session-tracker.js";
+import { getCurrentModelName } from "./core/embedder.js";
 
 const DB_PATH = process.env.MEMORY_DB ||
   path.join(process.env.HOME || "~", ".engram", "memory.db");
@@ -56,14 +57,23 @@ try {
 }
 const db = dbInstance.db;
 
-// Check for embedding model mismatch using DB records
+// Check for embedding model mismatch: current model vs DB records
 {
+  const currentModel = getCurrentModelName();
   const existing = db.prepare(
     "SELECT DISTINCT embed_model FROM memories WHERE embed_model IS NOT NULL AND deleted = 0 LIMIT 10"
   ).all() as Array<{ embed_model: string }>;
+
   if (existing.length > 1) {
     const models = existing.map((r) => r.embed_model).join(", ");
     log(`⚠️  Multiple embedding models detected in DB: ${models}. Consider re-indexing for consistent similarity search.`);
+  }
+
+  if (existing.length > 0) {
+    const dbModels = existing.map((r) => r.embed_model);
+    if (!dbModels.includes(currentModel)) {
+      log(`⚠️  Model mismatch: current model is "${currentModel}" but DB contains records from [${dbModels.join(", ")}]. Consider re-indexing.`);
+    }
   }
 }
 
