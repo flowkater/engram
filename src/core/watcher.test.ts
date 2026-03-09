@@ -38,6 +38,7 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000, intervalMs = 100): 
 
 describe("watcher", () => {
   let inst: DatabaseInstance;
+  const createdDirs: string[] = [];
 
   beforeEach(() => {
     inst = openDatabase(tmpDbPath());
@@ -45,10 +46,15 @@ describe("watcher", () => {
 
   afterEach(() => {
     inst.close();
+    for (const d of createdDirs) {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+    createdDirs.length = 0;
   });
 
   it("detects new file and indexes it", async () => {
     const dir = tmpDir();
+    createdDirs.push(dir);
     const indexed: string[] = [];
 
     const w = startWatcher(inst.db, {
@@ -72,6 +78,7 @@ describe("watcher", () => {
 
   it("detects file change and re-indexes", async () => {
     const dir = tmpDir();
+    createdDirs.push(dir);
     fs.writeFileSync(path.join(dir, "existing.md"), "# Existing\n\nOriginal content.");
 
     const indexed: string[] = [];
@@ -93,6 +100,7 @@ describe("watcher", () => {
 
   it("soft-deletes on file removal", async () => {
     const dir = tmpDir();
+    createdDirs.push(dir);
     const now = new Date().toISOString();
     const absDeletePath = path.resolve(path.join(dir, "to-delete.md"));
     inst.db.prepare(
@@ -123,6 +131,7 @@ describe("watcher", () => {
 
   it("ignores .obsidian directory", async () => {
     const dir = tmpDir();
+    createdDirs.push(dir);
     fs.mkdirSync(path.join(dir, ".obsidian"), { recursive: true });
 
     const indexed: string[] = [];
@@ -218,8 +227,8 @@ describe("diffScan with checkpoints", () => {
     await diffScan(inst.db, dir);
 
     // Modify file A (ensure mtime changes)
-    await new Promise((r) => setTimeout(r, 50));
     fs.writeFileSync(path.join(dir, "a.md"), "# File A\n\nUpdated content A.");
+    fs.utimesSync(path.join(dir, "a.md"), new Date(Date.now() + 2000), new Date(Date.now() + 2000));
 
     const result2 = await diffScan(inst.db, dir);
     expect(result2.indexed).toBe(1);
@@ -277,8 +286,8 @@ describe("diffScan with checkpoints", () => {
 
     await diffScan(inst.db, dir);
 
-    await new Promise((r) => setTimeout(r, 50));
     fs.writeFileSync(path.join(dir, "a.md"), "# File A\n\nModified A.");
+    fs.utimesSync(path.join(dir, "a.md"), new Date(Date.now() + 2000), new Date(Date.now() + 2000));
 
     const result2 = await diffScan(inst.db, dir);
     expect(result2.indexed).toBe(1);
@@ -291,9 +300,10 @@ describe("diffScan with checkpoints", () => {
 
     await diffScan(inst.db, dir);
 
-    await new Promise((r) => setTimeout(r, 50));
     fs.writeFileSync(path.join(dir, "a.md"), "# File A\n\nModified A.");
+    fs.utimesSync(path.join(dir, "a.md"), new Date(Date.now() + 2000), new Date(Date.now() + 2000));
     fs.writeFileSync(path.join(dir, "b.md"), "# File B\n\nModified B.");
+    fs.utimesSync(path.join(dir, "b.md"), new Date(Date.now() + 2000), new Date(Date.now() + 2000));
 
     const result2 = await diffScan(inst.db, dir);
     expect(result2.indexed).toBe(2);
@@ -305,9 +315,8 @@ describe("diffScan with checkpoints", () => {
     await diffScan(inst.db, dir);
 
     // Touch the file (change mtime but same content)
-    await new Promise((r) => setTimeout(r, 50));
-    const now = new Date();
-    fs.utimesSync(path.join(dir, "a.md"), now, now);
+    const futureTime = new Date(Date.now() + 2000);
+    fs.utimesSync(path.join(dir, "a.md"), futureTime, futureTime);
 
     const result2 = await diffScan(inst.db, dir);
     // mtime changed → indexFile is called, but isAlreadyIndexed will skip (same hash)
@@ -396,8 +405,8 @@ describe("diffScan with checkpoints", () => {
     await indexFile(inst.db, filePath, absPath, { source: "obsidian" });
 
     // 3. Modify the file before checkpoint can be recorded
-    await new Promise((r) => setTimeout(r, 50));
     fs.writeFileSync(filePath, "# Racing\n\nModified during indexing!");
+    fs.utimesSync(filePath, new Date(Date.now() + 2000), new Date(Date.now() + 2000));
     const statAfter = fs.statSync(filePath);
     const mtimeAfter = statAfter.mtimeMs;
 
