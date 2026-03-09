@@ -112,6 +112,13 @@ describe("database", () => {
     expect(absRow.deleted).toBe(0);
   });
 
+  it("new DB has embed_model column in CREATE TABLE", () => {
+    const { db } = open();
+    const cols = db.pragma("table_info(memories)") as Array<{ name: string }>;
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).toContain("embed_model");
+  });
+
   it("is idempotent (open twice same db)", () => {
     const p = tmpDbPath();
     const inst1 = openDatabase(p);

@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS memories (
   updated_at TEXT NOT NULL,
   accessed_at TEXT,
   access_count INTEGER DEFAULT 0,
-  deleted INTEGER DEFAULT 0
+  deleted INTEGER DEFAULT 0,
+  embed_model TEXT
 );
 
 -- Indexes
