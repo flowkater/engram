@@ -126,8 +126,10 @@ export async function diffScan(
   for (const cp of allCheckpoints) {
     if (!currentFiles.has(cp.source_path)) {
       try {
-        softDeleteByPath(db, cp.source_path);
-        deleteCheckpoint.run(cp.source_path);
+        db.transaction(() => {
+          softDeleteByPath(db, cp.source_path);
+          deleteCheckpoint.run(cp.source_path);
+        })();
       } catch (err) {
         opts?.onError?.(err as Error);
       }
@@ -243,7 +245,9 @@ export function startWatcher(
       debounceTimers.delete(relativePath);
     }
     try {
-      softDeleteByPath(db, absPath);
+      db.transaction(() => {
+        softDeleteByPath(db, absPath);
+      })();
       opts.onDeleted?.(relativePath);
     } catch (err) {
       opts.onError?.(err as Error);
