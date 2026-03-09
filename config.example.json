@@ -1,20 +1,13 @@
 {
   "scopeMap": {
-    "todait-backend": "/workspace/todait/todait/todait-backend",
-    "todait-ios": "/workspace/todait/todait/todait-ios",
-    "data-pipeline": "/Projects/data-pipeline",
-    "scrumble-backend": "/Projects/scrumble-backend",
-    "blog": "/Projects/flowkater.io",
-    "openclaw": "/.openclaw",
-    "mentoring": "/Obsidian/flowkater/flowkater/Mentoring"
+    "my-backend": "/path/to/my-backend",
+    "my-ios": "/path/to/my-ios-app",
+    "data-pipeline": "/path/to/data-pipeline",
+    "blog": "/path/to/blog"
   },
   "obsidianScopeMap": {
-    "Project/todait-backend-v2/": "todait-backend",
-    "Project/todait-ios/": "todait-ios",
-    "Project/data-pipeline/": "data-pipeline",
-    "Project/Todait/": "todait",
-    "Mentoring/": "mentoring",
-    "Blog/": "blog",
+    "Project/my-backend/": "my-backend",
+    "Project/my-ios/": "my-ios",
     "Study/": "study",
     "Daily/": "daily"
   }
