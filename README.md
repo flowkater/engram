@@ -13,7 +13,7 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 - **Graph Layer**: Normalized tag table + wikilink relationships with UNION dedup
 - **Scope Isolation**: Config-based project scoping (external `config.json`)
 - **Integrity**: Health checks, transactional writes, soft-delete with sync cleanup
-- **113 Tests**: Unit + E2E with fixture vault
+- **147 Tests**: Unit + E2E with fixture vault
 
 ## Quick Start (로컬 테스트)
 
@@ -29,7 +29,7 @@ npm install
 npm run build
 
 # 3. 테스트 실행 (Ollama 없이도 동작 — mock embedder)
-npm test                   # 113 tests expected
+npm test                   # 147 tests expected
 
 # 4. Obsidian vault 인덱싱
 node dist/cli.js index ~/Obsidian/flowkater/flowkater --source obsidian
@@ -148,7 +148,7 @@ The `minScore` parameter in `memory.search` uses a **0~1 normalized scale** wher
 
 ```bash
 npm run dev          # Run server in dev mode
-npm test             # Run all tests (113)
+npm test             # Run all tests (147)
 npm run test:watch   # Watch mode
 npm run build        # Build for production
 ```
