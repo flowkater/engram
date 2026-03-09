@@ -78,6 +78,9 @@ export async function indexFile(
   relativePath: string,
   opts: IndexFileOptions
 ): Promise<IndexResult> {
+  // Normalize source_path to absolute — prevent basename-only collisions
+  relativePath = path.resolve(relativePath);
+
   const content = fs.readFileSync(filePath, "utf-8");
   const hash = sha256(content);
 

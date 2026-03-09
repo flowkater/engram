@@ -42,12 +42,13 @@ describe("indexer", () => {
     expect(result.skipped).toBe(false);
     expect(result.chunks).toBeGreaterThanOrEqual(1);
 
-    // Verify in DB
-    const rows = inst.db.prepare("SELECT * FROM memories WHERE source_path = ? AND deleted = 0").all("test.md");
+    // source_path should be normalized to absolute
+    const resolvedPath = path.resolve("test.md");
+    const rows = inst.db.prepare("SELECT * FROM memories WHERE source_path = ? AND deleted = 0").all(resolvedPath);
     expect(rows.length).toBe(result.chunks);
 
     // Verify embed_model is stored
-    const row = inst.db.prepare("SELECT embed_model FROM memories WHERE source_path = ? AND deleted = 0 LIMIT 1").get("test.md") as any;
+    const row = inst.db.prepare("SELECT embed_model FROM memories WHERE source_path = ? AND deleted = 0 LIMIT 1").get(resolvedPath) as any;
     expect(row.embed_model).toBe("test-model");
   });
 
@@ -56,8 +57,8 @@ describe("indexer", () => {
     const filePath = path.join(dir, "test.md");
     fs.writeFileSync(filePath, "# Test\n\nContent here.");
 
-    await indexFile(inst.db, filePath, "test.md", { source: "obsidian" });
-    const result2 = await indexFile(inst.db, filePath, "test.md", { source: "obsidian" });
+    await indexFile(inst.db, filePath, filePath, { source: "obsidian" });
+    const result2 = await indexFile(inst.db, filePath, filePath, { source: "obsidian" });
 
     expect(result2.skipped).toBe(true);
     expect(result2.chunks).toBe(0);
@@ -68,15 +69,15 @@ describe("indexer", () => {
     const filePath = path.join(dir, "test.md");
     fs.writeFileSync(filePath, "# Test\n\nOriginal content.");
 
-    await indexFile(inst.db, filePath, "test.md", { source: "obsidian" });
+    await indexFile(inst.db, filePath, filePath, { source: "obsidian" });
 
     // Modify file
     fs.writeFileSync(filePath, "# Test\n\nUpdated content with more text.");
-    const result = await indexFile(inst.db, filePath, "test.md", { source: "obsidian" });
+    const result = await indexFile(inst.db, filePath, filePath, { source: "obsidian" });
 
     expect(result.skipped).toBe(false);
     // Old chunks should be soft-deleted
-    const deleted = inst.db.prepare("SELECT COUNT(*) as c FROM memories WHERE source_path = ? AND deleted = 1").get("test.md") as { c: number };
+    const deleted = inst.db.prepare("SELECT COUNT(*) as c FROM memories WHERE source_path = ? AND deleted = 1").get(filePath) as { c: number };
     expect(deleted.c).toBeGreaterThanOrEqual(1);
   });
 
@@ -132,9 +133,9 @@ describe("indexer", () => {
     const filePath = path.join(dir, "test.md");
     fs.writeFileSync(filePath, `---\nscope: todait-backend\ntags: [api]\n---\n\n# Test\n\nAPI content.`);
 
-    await indexFile(inst.db, filePath, "test.md", { source: "obsidian" });
+    await indexFile(inst.db, filePath, filePath, { source: "obsidian" });
 
-    const row = inst.db.prepare("SELECT source, scope, tags FROM memories WHERE source_path = ? AND deleted = 0").get("test.md") as any;
+    const row = inst.db.prepare("SELECT source, scope, tags FROM memories WHERE source_path = ? AND deleted = 0").get(filePath) as any;
     expect(row.source).toBe("obsidian");
     expect(row.scope).toBe("todait-backend");
     expect(JSON.parse(row.tags)).toContain("api");
@@ -145,18 +146,45 @@ describe("indexer", () => {
     // First, create a note that will be the link target
     const targetPath = path.join(dir, "Task Processing.md");
     fs.writeFileSync(targetPath, "# Task Processing\n\nDetails about task processing.");
-    await indexFile(inst.db, targetPath, "Task Processing.md", { source: "obsidian" });
+    await indexFile(inst.db, targetPath, targetPath, { source: "obsidian" });
 
     // Now create a note with a wikilink to it
     const sourcePath = path.join(dir, "policy.md");
     fs.writeFileSync(sourcePath, "# Policy\n\nSee [[Task Processing]] for details.");
-    await indexFile(inst.db, sourcePath, "policy.md", { source: "obsidian" });
+    await indexFile(inst.db, sourcePath, sourcePath, { source: "obsidian" });
 
     // Check that a wikilink was created
     const links = inst.db.prepare(
       "SELECT * FROM memory_links WHERE link_type = 'wikilink'"
     ).all() as any[];
     expect(links.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("normalizes relative source_path to absolute", async () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "test.md");
+    fs.writeFileSync(filePath, "# Test\n\nContent for normalization test.");
+
+    // Pass relative path — should be stored as absolute
+    const result = await indexFile(inst.db, filePath, "test.md", { source: "obsidian" });
+    expect(result.skipped).toBe(false);
+
+    const row = inst.db.prepare("SELECT source_path FROM memories WHERE deleted = 0 LIMIT 1").get() as { source_path: string };
+    expect(path.isAbsolute(row.source_path)).toBe(true);
+    expect(row.source_path).toBe(path.resolve("test.md"));
+  });
+
+  it("keeps absolute source_path unchanged", async () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "test.md");
+    fs.writeFileSync(filePath, "# Test\n\nAbsolute path test.");
+
+    // Pass absolute path — should be stored as-is
+    const result = await indexFile(inst.db, filePath, filePath, { source: "obsidian" });
+    expect(result.skipped).toBe(false);
+
+    const row = inst.db.prepare("SELECT source_path FROM memories WHERE deleted = 0 LIMIT 1").get() as { source_path: string };
+    expect(row.source_path).toBe(filePath);
   });
 
   it("reports progress during directory indexing", async () => {
