@@ -1,101 +1,103 @@
-# CLAUDE.md — Engram Phase 1 코드리뷰 반영
+# CLAUDE.md — Engram Phase 0 재실행 (유실 복구)
 
 ## 프로젝트
 - 경로: ~/Projects/engram
 - 브랜치: master
-- 현재: 143 tests, 22 files, tsc 0 errors
+- 현재: 144 tests passed
+- 스택: TypeScript + SQLite + sqlite-vec + Vitest
 
-## 반영할 코드리뷰 피드백 (9개, 우선순위순)
+## TDD 규칙
+- Red → Green → Refactor
+- 각 작업 완료 시 `npm test` + `npx tsc --noEmit` 통과 후 개별 커밋
+- 커밋 후 반드시 `git push origin master`
 
-### 🟠 Medium (Phase 2 전 필수)
+## 목표: Phase 0 유실 태스크 4개 재실행
 
-#### Fix 1: model mismatch 체크 복원 (server.ts:59-64)
-- **문제**: DB에 2종 이상 embed_model일 때만 경고 → 기존 레코드 전부 구 모델 + 현재 새 모델 조합 감지 안 됨
-- **수정**: 현재 설정된 모델(Ollama 연결 테스트 또는 env 기반)과 DB의 최신 embed_model을 비교. 불일치 시 경고.
-- **테스트**: server 헬스체크에서 모델 불일치 감지 테스트 (있으면 수정, 없으면 추가)
+---
 
-#### Fix 2: scope.ts catch {} 무음 실패 → console.warn 추가
-- **문제**: config.json 파싱 오류가 전부 삼켜짐
-- **수정**:
+### Task 0-1: STRICT_LOCAL 기본값 (Critical)
+
+**문제**: embedder.ts에서 OPENAI_API_KEY가 있으면 자동 fallback → "100% local" 포지셔닝 불일치
+
+**수정**:
+- `src/embedder.ts`에 `STRICT_LOCAL` 플래그 추가
+- 환경변수 `ENGRAM_STRICT_LOCAL` (기본값: `true`)
+- `true`일 때 OpenAI fallback 차단, Ollama만 사용
+- `false`로 명시적 설정 시에만 OpenAI fallback 허용
+
 ```typescript
-} catch (err) {
-  console.warn(`[scope] Failed to parse config.json: ${(err as Error).message}`);
+const strictLocal = (process.env.ENGRAM_STRICT_LOCAL ?? 'true') !== 'false';
+if (strictLocal) {
+  // OpenAI fallback 차단 — Ollama only
 }
 ```
 
-#### Fix 3: source_path 상대→절대 one-time 마이그레이션
-- **문제**: Phase 0에서 source_path를 절대경로로 전환했으나 기존 DB 행은 상대경로 유지 → softDeleteByPath 매칭 안 됨 → ghost rows
-- **수정**: database.ts의 openDatabase()에 마이그레이션 추가:
-  1. `SELECT DISTINCT source_path FROM memories WHERE deleted = 0 AND source_path NOT LIKE '/%'` (상대경로 감지)
-  2. 상대경로 행이 있으면 → soft delete (deleted=1) 처리
-  3. 또는 known vault base path가 있으면 절대경로로 UPDATE
-  4. 마이그레이션 실행 여부를 로그로 출력
-- **테스트**: 상대경로 레코드가 있는 DB → openDatabase 후 soft delete 또는 절대경로 변환 확인
+**테스트**:
+1. STRICT_LOCAL=true (기본) → OpenAI API 키 있어도 Ollama만 사용
+2. STRICT_LOCAL=false → OpenAI fallback 허용
+3. env 미설정 → strict local 기본 동작
 
-#### Fix 4: config.example.json 익명화
-- **문제**: 실제 프로젝트 경로 노출 (/workspace/todait 등)
-- **수정**: 경로를 제네릭하게 변경:
-```json
-{
-  "scopeMap": {
-    "my-backend": "/path/to/my-backend",
-    "my-ios": "/path/to/my-ios-app"
-  },
-  "obsidianScopeMap": {
-    "Project/my-backend/": "my-backend",
-    "Study/": "study",
-    "Daily/": "daily"
-  }
-}
-```
+**커밋**: `feat: STRICT_LOCAL default — block OpenAI fallback by default`
 
-### 🟡 Low (품질 개선)
+---
 
-#### Fix 5: setTimeout(50) → fs.utimesSync 교체 (watcher.test.ts)
-- **문제**: mtime 변경을 `setTimeout(50)` 대기에 의존 → CI 고부하/HFS+에서 flake 가능
-- **수정**: `fs.utimesSync(filePath, new Date(Date.now() + 2000), new Date(Date.now() + 2000))` 로 mtime 명시 설정
-- 모든 watcher/diffScan 테스트에서 `setTimeout` 대신 `utimesSync` 사용
+### Task 0-2: embed_model provenance (Major)
 
-#### Fix 6: watcher 삭제 처리 db.transaction() 감싸기
-- **문제**: diffScan에서 soft delete + checkpoint 삭제가 트랜잭션 없이 실행
-- **수정**: `db.transaction(() => { softDeleteByPath(...); deleteCheckpoint(...); })()`
+**문제**: `memories` 테이블 CREATE 문에 `embed_model` 컬럼 없음. ALTER TABLE로만 추가 → 스키마 drift.
 
-#### Fix 7: E2E mock embedder 중복 → 공유 createMockEmbedder() 통일
-- **문제**: full-pipeline.test.ts 등에서 인라인 PRNG mock 사용, 공유 헬퍼와 불일치
-- **수정**: `src/__test__/mock-embedder.ts`의 `createMockEmbedder()` 사용으로 통일
+**수정**:
+- `src/database.ts`의 CREATE TABLE memories에 `embed_model TEXT` 컬럼 추가
+- ALTER TABLE 마이그레이션은 기존 DB 호환용으로 유지 (IF NOT EXISTS)
+- embed 시 모델명 기록: `ollama:nomic-embed-text` 또는 `openai:text-embedding-3-small`
 
-#### Fix 8: watcher afterEach tmpDir cleanup
-- **문제**: 테스트 후 tmpDir 삭제 안 됨 → CI /tmp 누적
-- **수정**: afterEach에 `fs.rmSync(tmpDir, { recursive: true, force: true })` 추가
+**테스트**:
+1. 새 DB 생성 시 embed_model 컬럼 존재 확인
+2. 메모리 저장 시 embed_model 값 기록 확인
+3. 기존 DB (컬럼 없음) → ALTER 마이그레이션 정상
 
-#### Fix 9: minScore 절대→상대 변환 문서화
-- **문제**: 저품질 결과만 있어도 최고 점수가 1.0이 되어 전부 통과
-- **수정**: README에 한계 문서화 (이미 계획서에 명시, 코드 변경 불필요. README 확인만)
+**커밋**: `feat: embed_model in CREATE TABLE — eliminate schema drift`
 
-## 실행 순서
+---
 
-1. Fix 4 (config.example 익명화) — 가장 단순
-2. Fix 2 (scope catch warn) — 1줄
-3. Fix 9 (README 확인) — 문서만
-4. Fix 8 (tmpDir cleanup) — 테스트 수정
-5. Fix 7 (mock embedder 통일) — 테스트 수정
-6. Fix 5 (utimesSync) — 테스트 수정
-7. Fix 6 (transaction) — watcher.ts 수정
-8. Fix 3 (source_path 마이그레이션) — database.ts + 테스트
-9. Fix 1 (model mismatch 복원) — server.ts + 테스트
+### Task 0-3: source_path 정규화 (Medium)
+
+**문제**: 단일 파일 ingest 시 source_path에 basename만 저장 → 경로 충돌 위험
+
+**수정**:
+- `src/indexer.ts`에서 source_path 저장 전 `path.resolve()` 적용
+- 이미 absolute path면 그대로, relative면 resolve
+- 기존 `source_path relative→absolute migration` 커밋(17ceb5f)이 있으므로, 그 로직과 일관성 유지
+
+**테스트**:
+1. relative path 입력 → absolute path 저장
+2. absolute path 입력 → 그대로 저장
+3. basename만 입력 → cwd 기준 resolve
+
+**커밋**: `fix: source_path normalization — always store absolute paths`
+
+---
+
+### Task 0-4: README/주석 drift (Minor)
+
+**수정**:
+- README.md에서 실제 코드와 불일치하는 부분 수정
+- MCP 도구 목록 10개 정확히 반영
+- 설치/사용법 현재 코드 기준으로 업데이트
+- tsc 에러 있으면 수정
+
+**커밋**: `docs: sync README with current codebase — fix drift`
+
+---
 
 ## 완료 기준
 
 ```bash
-npm test          # 전체 통과 (143+)
-npx tsc --noEmit  # 0 errors
-npm run build     # 성공
+npm test              # 전체 통과
+npx tsc --noEmit      # 0 errors
 ```
-
-각 Fix를 개별 커밋.
 
 ## 완료 후
 
 ```bash
-openclaw system event --text "Done: Engram Phase 1 review fixes — all 9 items addressed" --mode now
+git push origin master
 ```
