@@ -86,6 +86,32 @@ describe("database", () => {
     expect(results[0].id).toBe("test-1");
   });
 
+  it("soft-deletes records with relative source_path on open", () => {
+    const p = tmpDbPath();
+    // First open to create schema
+    const inst1 = openDatabase(p);
+
+    // Insert records with relative paths (legacy Phase 0 data)
+    const now = new Date().toISOString();
+    inst1.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, scope, tags, importance, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("rel-1", "relative path record", "obsidian", "notes/test.md", "hash1", "global", "[]", 0.5, now, now, 0);
+    inst1.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, scope, tags, importance, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("abs-1", "absolute path record", "obsidian", "/Users/test/notes/test.md", "hash2", "global", "[]", 0.5, now, now, 0);
+    inst1.close();
+
+    // Re-open — migration should soft-delete relative path records
+    const inst2 = openDatabase(p);
+    dbs.push(inst2);
+
+    const relRow = inst2.db.prepare("SELECT deleted FROM memories WHERE id = ?").get("rel-1") as { deleted: number };
+    expect(relRow.deleted).toBe(1);
+
+    const absRow = inst2.db.prepare("SELECT deleted FROM memories WHERE id = ?").get("abs-1") as { deleted: number };
+    expect(absRow.deleted).toBe(0);
+  });
+
   it("is idempotent (open twice same db)", () => {
     const p = tmpDbPath();
     const inst1 = openDatabase(p);

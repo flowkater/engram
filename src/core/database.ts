@@ -153,6 +153,25 @@ export function openDatabase(dbPath: string = DEFAULT_DB_PATH): DatabaseInstance
     db.exec("ALTER TABLE memories ADD COLUMN embed_model TEXT");
   }
 
+  // Migration: soft-delete records with relative source_path (Phase 0 → Phase 1)
+  const relativePaths = db.prepare(
+    "SELECT DISTINCT source_path FROM memories WHERE deleted = 0 AND source_path IS NOT NULL AND source_path != '' AND source_path NOT LIKE '/%'"
+  ).all() as Array<{ source_path: string }>;
+
+  if (relativePaths.length > 0) {
+    console.warn(
+      `[database] Found ${relativePaths.length} relative source_path(s) — soft-deleting legacy records`
+    );
+    const softDelete = db.prepare(
+      "UPDATE memories SET deleted = 1 WHERE source_path = ? AND deleted = 0"
+    );
+    db.transaction(() => {
+      for (const row of relativePaths) {
+        softDelete.run(row.source_path);
+      }
+    })();
+  }
+
   return {
     db,
     close() {
