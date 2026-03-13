@@ -9,10 +9,13 @@ export interface HealthResult {
   orphanedVectors: number;
   orphanedFts: number;
   orphanedTags: number;
+  orphanedCanonicalEvidence: number;
+  brokenCanonicalEdges: number;
   modelMismatch: Record<string, number>;
   brokenLinks: number;
   totalMemories: number;
   totalVectors: number;
+  totalCanonical: number;
   healthy: boolean;
 }
 
@@ -28,6 +31,10 @@ export function memoryHealth(db: Database.Database): HealthResult {
   // Total vectors
   const { total: totalVectors } = db.prepare(
     "SELECT COUNT(*) as total FROM memory_vec"
+  ).get() as { total: number };
+
+  const { total: totalCanonical } = db.prepare(
+    "SELECT COUNT(*) as total FROM canonical_memories"
   ).get() as { total: number };
 
   // Orphaned memories: in memories(deleted=0) but not in memory_vec
@@ -54,6 +61,12 @@ export function memoryHealth(db: Database.Database): HealthResult {
      WHERE NOT EXISTS (SELECT 1 FROM memories m WHERE m.id = t.memory_id AND m.deleted = 0)`
   ).get() as { c: number };
 
+  const { c: orphanedCanonicalEvidence } = db.prepare(
+    `SELECT COUNT(*) as c FROM canonical_evidence ce
+     WHERE NOT EXISTS (SELECT 1 FROM canonical_memories cm WHERE cm.id = ce.canonical_id)
+        OR NOT EXISTS (SELECT 1 FROM memories m WHERE m.id = ce.memory_id AND m.deleted = 0)`
+  ).get() as { c: number };
+
   // Model mismatch: count by embed_model
   const modelRows = db.prepare(
     "SELECT COALESCE(embed_model, 'unknown') as model, COUNT(*) as c FROM memories WHERE deleted = 0 GROUP BY embed_model"
@@ -70,18 +83,28 @@ export function memoryHealth(db: Database.Database): HealthResult {
         OR NOT EXISTS (SELECT 1 FROM memories m WHERE m.id = l.to_id AND m.deleted = 0)`
   ).get() as { c: number };
 
+  const { c: brokenCanonicalEdges } = db.prepare(
+    `SELECT COUNT(*) as c FROM canonical_edges e
+     WHERE NOT EXISTS (SELECT 1 FROM canonical_memories cm WHERE cm.id = e.from_canonical_id)
+        OR NOT EXISTS (SELECT 1 FROM canonical_memories cm WHERE cm.id = e.to_canonical_id)`
+  ).get() as { c: number };
+
   const healthy = orphanedMemories === 0 && orphanedVectors === 0 &&
-    orphanedFts === 0 && orphanedTags === 0 && brokenLinks === 0;
+    orphanedFts === 0 && orphanedTags === 0 && orphanedCanonicalEvidence === 0 &&
+    brokenLinks === 0 && brokenCanonicalEdges === 0;
 
   return {
     orphanedMemories,
     orphanedVectors,
     orphanedFts,
     orphanedTags,
+    orphanedCanonicalEvidence,
+    brokenCanonicalEdges,
     modelMismatch,
     brokenLinks,
     totalMemories,
     totalVectors,
+    totalCanonical,
     healthy,
   };
 }

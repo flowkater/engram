@@ -60,20 +60,31 @@ FORGE 즉시 실행 가능.
 
 "검색 서버 → 기억 시스템" 전환의 핵심.
 
+**Phase 2 v1 원칙:**
+- manual canonicalization 우선, auto-promotion은 보류
+- `memory.add`는 raw evidence 전용으로 유지
+- canonical layer는 raw layer 위에 별도 `canonical_*` 테이블로 추가
+- `time-aware`는 먼저 `memory.search.asOf`에만 적용
+- 운영 안전성(`prune`/`scheduler`/`health`/`stats`)을 같은 phase 안에서 같이 보강
+
 | # | 작업 | 핵심 이유 |
 |---|------|----------|
-| 2-1 | **memory promotion pipeline** | raw chunk → canonical memory 승격. retrieval 빈도 + 반복 등장 기준으로 자동 승격 |
-| 2-2 | **supersedes/contradicts 관계** | "예전엔 A였는데 지금은 B" 추적. 오래된 사실이 최신 사실을 덮는 문제 해결 |
-| 2-3 | **decision memory** | "무엇을 했는가" 뿐 아니라 "왜 그렇게 했는가" 저장. 수동 태깅 우선 |
-| 2-4 | **time-aware query** | "지난주 기준으로 인증 방식이 뭐였지?" — validity interval 기반 시점 질의 |
+| 2-1 | **manual promotion pipeline** | raw memory → canonical memory 수동 승격. 현재 `access_count`는 조회 노이즈가 섞여 auto-promotion 신호로 부적합 |
+| 2-2 | **supersedes/contradicts 관계** | truth change와 conflict를 분리해 표현. `supersedes`만 validity를 닫고 `contradicts`는 비파괴로 유지 |
+| 2-3 | **decision memory** | canonical `decision` 타입 추가. `memory.add`를 확장하지 않고 `memory.promote`로만 생성 |
+| 2-4 | **time-aware query** | 먼저 `memory.search.asOf`만 지원. context/graph historical replay는 후속 단계로 분리 |
+| 2-5 | **operational safety for canonical layer** | active canonical memory가 참조하는 raw evidence를 prune/scheduler가 지우지 않도록 보장 |
 
-**완료 기준**: canonical memory 테이블 + promotion 로직 + supersedes 관계 동작 확인
+**완료 기준**: canonical memory/evidence/edge 테이블 + manual promotion + supersedes/contradicts + `memory.search.asOf` + canonical-aware prune/health/stats 동작 확인
 
 ---
 
 ## Phase 3: 개발자 작업기억 커넥터 (2-3주)
 
 피드백이 정확히 짚은 **"cloud가 못 따라오는 영역"**.
+
+**방향성:** breadth 경쟁 대신 developer workflow truth engine에 집중.
+Google Drive/Gmail/범용 consumer profile보다 git/build/test/failure/terminal 맥락을 먼저 기억한다.
 
 | # | 작업 | 핵심 이유 |
 |---|------|----------|
@@ -118,10 +129,11 @@ Phase 4 (3-4주)  ■■■■■■■■ 품질+제품화
 | 제외 항목 | 이유 |
 |----------|------|
 | 온톨로지 확장 (PageRank GraphRAG, LLM entity extraction, domain schema) | 별도 로드맵으로 분리. 기억 모델이 먼저 |
-| typed memory full taxonomy (fact/procedure/preference/bug/todo 등) | Phase 2에서 decision만 먼저. 나머지는 실사용 데이터 보고 |
+| typed memory full taxonomy (fact/procedure/preference/bug/todo 등) | Phase 2 v1은 `fact`/`decision`만. 나머지는 실사용 데이터 보고 |
 | query intent router | Phase 4 eval 결과 보고 판단 |
 | Supermemory 벤치마킹 | 용도가 다름 — 우리는 개발자 MCP 메모리 |
 | memory inspector web UI | TUI 우선. web은 사용량 보고 |
+| auto-promotion | 현재 `access_count`는 조회 노이즈가 섞임. 실사용 피드백/평가 지표 확보 후 재검토 |
 
 ---
 
@@ -141,6 +153,10 @@ temporal handling    memory surgery
 > **provenance, inspectability, editability, reproducibility, project-scoped privacy**
 > 특히 Git/터미널/빌드/테스트/디버깅 맥락 기억은 cloud 제품이 따라올 수 없다.
 
+> 운영 원칙:
+> canonical truth는 항상 raw evidence와 함께 설명 가능해야 한다.
+> breadth보다 provenance와 staleness control이 우선이다.
+
 ---
 
 ## ⚠️ FORGE 실행 시 주의사항
@@ -148,8 +164,10 @@ temporal handling    memory surgery
 1. **Phase 순서 엄수** — 반드시 Phase 0 → 1 → 2 → 3 → 4 순서. 앞 Phase 완료 전 다음 Phase 착수 금지
 2. **기존 테스트 108개 보호** — Phase 0~1은 버그 수정/정합성이므로, 기존 테스트가 깨지면 안 됨. 새 테스트 추가는 OK
 3. **Phase 2 데이터 모델 변경 전 토니 확인 필수** — typed memory + canonicalization은 DB 스키마 변경이 큼. 마이그레이션 잘못되면 670MB 재인덱싱. **설계 먼저 → 토니 승인 → 구현** 순서
-4. **Phase 2부터는 실사용 피드백 반영** — "잘못된 기억이 올라온 케이스", "못 찾은 기억 케이스" 등 실제 데이터를 수집한 뒤 방향 조정. 이론만으로 과도하게 확장하지 말 것
-5. **Phase 3~4는 실사용 데이터 재평가 후 착수** — Phase 2 결과 + 실사용 2~3주 데이터를 보고 Phase 3~4 범위를 재조정할 수 있음
+4. **Phase 2 v1은 manual canonicalization만** — auto-promotion, graph time-travel, broad taxonomy는 넣지 말 것
+5. **운영 안전성은 같은 phase에서 같이 처리** — canonical layer 도입 시 prune/scheduler/health/stats를 반드시 함께 보강
+6. **Phase 2부터는 실사용 피드백 반영** — "잘못된 기억이 올라온 케이스", "못 찾은 기억 케이스" 등 실제 데이터를 수집한 뒤 방향 조정. 이론만으로 과도하게 확장하지 말 것
+7. **Phase 3~4는 실사용 데이터 재평가 후 착수** — Phase 2 결과 + 실사용 2~3주 데이터를 보고 Phase 3~4 범위를 재조정할 수 있음
 
 ---
 

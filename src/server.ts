@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Engram MCP Server — stdio transport entry point.
- * Registers all 10 memory tools.
+ * Registers all 11 memory tools.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -19,10 +19,12 @@ import { memoryStats } from "./tools/stats.js";
 import { memoryGraph } from "./tools/graph.js";
 import { memoryHealth } from "./tools/health.js";
 import { memoryRestore } from "./tools/restore.js";
-import { startWatcher, diffScan } from "./core/watcher.js";
-import { startScheduler } from "./core/scheduler.js";
+import { memoryPromote } from "./tools/promote.js";
 import { SessionTracker } from "./core/session-tracker.js";
 import { getCurrentModelName } from "./core/embedder.js";
+import { resolveBackgroundJobConfig } from "./core/runtime-leases.js";
+import { resolveBackgroundTiming, startBackgroundWorker, type BackgroundWorkerInstance } from "./core/background-worker.js";
+import { startBackgroundJobs } from "./core/background-jobs.js";
 
 const DB_PATH = process.env.MEMORY_DB ||
   path.join(process.env.HOME || "~", ".engram", "memory.db");
@@ -126,11 +128,12 @@ server.tool(
     source: z.enum(["obsidian", "session", "manual", "notion", "memory-md"]).optional().describe("Source filter"),
     agent: z.string().optional().describe("Agent filter"),
     minScore: z.number().optional().describe("Minimum relevance score (0~1 normalized, where 1.0 = best match). Default: 0"),
+    asOf: z.string().optional().describe("Optional ISO timestamp for time-aware canonical search"),
   },
-  async ({ query, scope, limit, source, agent, minScore }) => {
+  async ({ query, scope, limit, source, agent, minScore, asOf }) => {
     try {
-      sessionTracker.recordActivity("memory.search", { query, scope, limit, source, agent, minScore });
-      const results = await memorySearch(db, { query, scope, limit, source, agent, minScore });
+      sessionTracker.recordActivity("memory.search", { query, scope, limit, source, agent, minScore, asOf });
+      const results = await memorySearch(db, { query, scope, limit, source, agent, minScore, asOf });
       return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
     } catch (err) {
       return errorResponse("memory.search", err);
@@ -279,6 +282,45 @@ server.tool(
 
 // 9. memory.health — Database integrity diagnostics
 server.tool(
+  "memory.promote",
+  "Promote raw memories into canonical facts or decisions.",
+  {
+    memoryIds: z.array(z.string()).min(1).describe("Raw memory IDs to use as evidence"),
+    kind: z.enum(["fact", "decision"]).describe("Canonical memory type"),
+    title: z.string().describe("Short canonical title"),
+    content: z.string().describe("Canonical memory statement"),
+    scope: z.string().optional().describe("Project scope"),
+    confidence: z.number().min(0).max(1).optional().describe("Confidence score (0-1)"),
+    importance: z.number().min(0).max(1).optional().describe("Importance score (0-1)"),
+    validFrom: z.string().optional().describe("Validity start time (ISO-8601)"),
+    decidedAt: z.string().optional().describe("Decision timestamp (ISO-8601)"),
+    supersedes: z.array(z.string()).optional().describe("Canonical memory IDs superseded by this one"),
+    contradicts: z.array(z.string()).optional().describe("Canonical memory IDs contradicted by this one"),
+  },
+  async ({ memoryIds, kind, title, content, scope, confidence, importance, validFrom, decidedAt, supersedes, contradicts }) => {
+    try {
+      sessionTracker.recordActivity("memory.promote", { memoryIds, kind, title, content, scope, confidence, importance, validFrom, decidedAt, supersedes, contradicts });
+      const result = await memoryPromote(db, {
+        memoryIds,
+        kind,
+        title,
+        content,
+        scope,
+        confidence,
+        importance,
+        validFrom,
+        decidedAt,
+        supersedes,
+        contradicts,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+    } catch (err) {
+      return errorResponse("memory.promote", err);
+    }
+  }
+);
+
+server.tool(
   "memory.health",
   "Diagnose database integrity: orphaned records, model mismatches, broken links",
   {},
@@ -303,40 +345,28 @@ async function main() {
   sessionTracker.start();
 
   // Track resources for unified shutdown
-  let watcher: Awaited<ReturnType<typeof startWatcher>> | null = null;
-  let scheduler: ReturnType<typeof startScheduler> | null = null;
+  let backgroundWorker: BackgroundWorkerInstance | null = null;
 
-  // Start file watcher if vault exists
-  if (fs.existsSync(VAULT_PATH)) {
-    try {
-      // Diff scan: catch up on changes that happened while server was offline
-      const diffResult = await diffScan(db, VAULT_PATH, {
-        onIndexed: (file, chunks) => log(`[diffScan] Indexed ${file} (${chunks} chunks)`),
-        onError: (err) => log(`[diffScan] Error: ${err.message}`),
-      });
-      log(`Diff scan complete: ${diffResult.scanned} scanned, ${diffResult.indexed} indexed`);
+  const backgroundConfig = resolveBackgroundJobConfig();
+  const backgroundOwnerId = `server:${process.pid}:${Date.now()}`;
+  const needsBackgroundWorker = backgroundConfig.diffScanEnabled ||
+    backgroundConfig.watcherEnabled ||
+    backgroundConfig.schedulerEnabled;
 
-      watcher = startWatcher(db, {
+  if (needsBackgroundWorker) {
+    backgroundWorker = startBackgroundWorker(db, {
+      ownerId: backgroundOwnerId,
+      ...resolveBackgroundTiming(),
+      onLog: log,
+      startJobs: async () => startBackgroundJobs({
+        db,
         vaultPath: VAULT_PATH,
-        onIndexed: (file, chunks) => log(`Indexed ${file} (${chunks} chunks)`),
-        onDeleted: (file) => log(`Soft-deleted ${file}`),
-        onError: (err) => log(`Watcher error: ${err.message}`),
-      });
-      log(`Watching vault: ${VAULT_PATH}`);
-    } catch (err) {
-      log(`Warning: Could not start watcher: ${(err as Error).message}`);
-    }
-  } else {
-    log(`Vault not found at ${VAULT_PATH}, skipping watcher`);
-  }
-
-  // Start scheduler
-  try {
-    scheduler = startScheduler(db, {
-      onLog: (msg) => log(msg),
+        backgroundConfig,
+        log,
+      }),
     });
-  } catch (err) {
-    log(`Warning: Could not start scheduler: ${(err as Error).message}`);
+  } else {
+    log("Background jobs disabled by environment");
   }
 
   // Unified shutdown handler
@@ -346,8 +376,7 @@ async function main() {
     shutdownOnce = true;
     log(`Received ${signal}, shutting down...`);
     try { await sessionTracker.flush(); } catch (e) { log(`sessionTracker.flush error: ${(e as Error).message}`); }
-    try { if (watcher) await watcher.close(); } catch (e) { log(`watcher.close error: ${(e as Error).message}`); }
-    try { if (scheduler) scheduler.stop(); } catch (e) { log(`scheduler.stop error: ${(e as Error).message}`); }
+    try { if (backgroundWorker) await backgroundWorker.stop(); } catch (e) { log(`backgroundWorker.stop error: ${(e as Error).message}`); }
     try { dbInstance.close(); } catch (e) { log(`db.close error: ${(e as Error).message}`); }
     process.exit(0);
   }

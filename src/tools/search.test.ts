@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
 import { memoryAdd } from "./add.js";
+import { memoryPromote } from "./promote.js";
 import { memorySearch } from "./search.js";
 import path from "node:path";
 import os from "node:os";
@@ -159,5 +160,97 @@ describe("search score normalization", () => {
     for (const r of results) {
       expect(r.score).toBe(1.0);
     }
+  });
+
+  it("asOf filters canonical memories by validity window", async () => {
+    const oldRaw = await memoryAdd(inst.db, {
+      content: "Authentication used cookie sessions.",
+      scope: "todait-backend",
+    });
+    const newRaw = await memoryAdd(inst.db, {
+      content: "Authentication uses JWT access tokens.",
+      scope: "todait-backend",
+    });
+
+    const oldCanonical = await memoryPromote(inst.db, {
+      memoryIds: [oldRaw.id],
+      kind: "fact",
+      title: "Old auth mechanism",
+      content: "Authentication used cookie sessions.",
+      scope: "todait-backend",
+      validFrom: "2026-01-01T00:00:00.000Z",
+    });
+
+    await memoryPromote(inst.db, {
+      memoryIds: [newRaw.id],
+      kind: "fact",
+      title: "Current auth mechanism",
+      content: "Authentication uses JWT access tokens.",
+      scope: "todait-backend",
+      validFrom: "2026-03-01T00:00:00.000Z",
+      supersedes: [oldCanonical.canonicalId],
+    });
+
+    const february = await memorySearch(inst.db, {
+      query: "auth mechanism",
+      scope: "todait-backend",
+      asOf: "2026-02-01T00:00:00.000Z",
+      limit: 5,
+    });
+
+    const april = await memorySearch(inst.db, {
+      query: "auth mechanism",
+      scope: "todait-backend",
+      asOf: "2026-04-01T00:00:00.000Z",
+      limit: 5,
+    });
+
+    expect(february.some((r) => r.content.includes("cookie sessions"))).toBe(true);
+    expect(february.some((r) => r.content.includes("JWT access tokens"))).toBe(false);
+    expect(april.some((r) => r.content.includes("JWT access tokens"))).toBe(true);
+  });
+
+  it("does not return raw-only results for asOf queries without canonical memories", async () => {
+    await memoryAdd(inst.db, {
+      content: "Temporary rollout note without canonical promotion.",
+      scope: "todait-backend",
+      source: "manual",
+    });
+
+    const results = await memorySearch(inst.db, {
+      query: "temporary rollout",
+      scope: "todait-backend",
+      asOf: "2026-02-01T00:00:00.000Z",
+      limit: 5,
+    });
+
+    expect(results).toHaveLength(0);
+  });
+
+  it("skips canonical memories when raw-only filters are requested", async () => {
+    const raw = await memoryAdd(inst.db, {
+      content: "Authentication uses JWT access tokens.",
+      scope: "todait-backend",
+      source: "manual",
+      agent: "codex",
+    });
+
+    await memoryPromote(inst.db, {
+      memoryIds: [raw.id],
+      kind: "fact",
+      title: "Current auth mechanism",
+      content: "Authentication uses JWT access tokens.",
+      scope: "todait-backend",
+    });
+
+    const sourceFiltered = await memorySearch(inst.db, {
+      query: "JWT access tokens",
+      scope: "todait-backend",
+      source: "manual",
+      limit: 5,
+    });
+
+    expect(sourceFiltered.some((result) => result.isCanonical)).toBe(false);
+    expect(sourceFiltered.some((result) => result.id === raw.id)).toBe(true);
   });
 });

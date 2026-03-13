@@ -1,0 +1,26 @@
+# Ralph Context Snapshot
+
+- task statement: Prevent duplicate indexing when multiple Codex/Engram server processes run concurrently.
+- desired outcome: Building or restarting multiple Engram-backed processes must not trigger duplicate `diffScan`/watcher/scheduler work or repeated `/api/embeddings` calls for the same file.
+- known facts/evidence:
+  - `src/server.ts` starts `diffScan`, watcher, and scheduler on every server startup.
+  - `src/core/indexer.ts` performs `isAlreadyIndexed()` before embedding, but that check is outside any cross-process lock.
+  - Multiple live `node` processes are connected to Ollama `127.0.0.1:11434`.
+  - Engram server logs show repeated `[diffScan] Indexed ...` lines for the same files.
+- constraints:
+  - Work on main branch by explicit user request.
+  - Schema changes only in `src/core/database.ts`.
+  - Multi-table writes must remain transaction-safe.
+  - Must run tests and build before claiming completion.
+- unknowns/open questions:
+  - Minimal env flag shape for enabling/disabling startup background jobs.
+  - Exact lease schema and expiry semantics for cross-process file indexing locks.
+- likely codebase touchpoints:
+  - `src/server.ts`
+  - `src/core/database.ts`
+  - `src/core/indexer.ts`
+  - `src/core/watcher.ts`
+  - `src/core/indexer.test.ts`
+  - `src/core/watcher.test.ts`
+  - `src/server.test.ts`
+  - `README.md`

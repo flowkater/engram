@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { openDatabase, type DatabaseInstance } from "./database.js";
 import { startWatcher, diffScan } from "./watcher.js";
 import { indexFile, softDeleteByPath } from "./indexer.js";
+import { acquireRuntimeLease, buildIndexLeaseKey, releaseRuntimeLease } from "./runtime-leases.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -24,7 +25,7 @@ function tmpDir(): string {
   return dir;
 }
 
-function waitFor(predicate: () => boolean, timeoutMs = 5000, intervalMs = 100): Promise<void> {
+function waitFor(predicate: () => boolean, timeoutMs = 10000, intervalMs = 100): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const check = () => {
@@ -34,6 +35,10 @@ function waitFor(predicate: () => boolean, timeoutMs = 5000, intervalMs = 100): 
     };
     check();
   });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 describe("watcher", () => {
@@ -59,11 +64,14 @@ describe("watcher", () => {
 
     const w = startWatcher(inst.db, {
       vaultPath: dir,
+      usePolling: true,
+      pollingInterval: 50,
       debounceMs: 300,
       onIndexed: (file) => indexed.push(file),
     });
 
     await new Promise<void>((resolve) => w.watcher.on("ready", resolve));
+    await sleep(150);
 
     fs.writeFileSync(path.join(dir, "new-note.md"), "# New Note\n\nSome content here.");
 
@@ -85,13 +93,17 @@ describe("watcher", () => {
 
     const w = startWatcher(inst.db, {
       vaultPath: dir,
+      usePolling: true,
+      pollingInterval: 50,
       debounceMs: 300,
       onIndexed: (file) => indexed.push(file),
     });
 
     await new Promise<void>((resolve) => w.watcher.on("ready", resolve));
+    await sleep(150);
 
     fs.writeFileSync(path.join(dir, "existing.md"), "# Existing\n\nUpdated content with new info.");
+    fs.utimesSync(path.join(dir, "existing.md"), new Date(Date.now() + 2000), new Date(Date.now() + 2000));
 
     await waitFor(() => indexed.includes("existing.md"));
 
@@ -113,6 +125,8 @@ describe("watcher", () => {
 
     const w = startWatcher(inst.db, {
       vaultPath: dir,
+      usePolling: true,
+      pollingInterval: 50,
       debounceMs: 300,
       onDeleted: (file) => deleted.push(file),
     });
@@ -138,6 +152,8 @@ describe("watcher", () => {
 
     const w = startWatcher(inst.db, {
       vaultPath: dir,
+      usePolling: true,
+      pollingInterval: 50,
       debounceMs: 300,
       onIndexed: (file) => indexed.push(file),
     });
@@ -277,6 +293,24 @@ describe("diffScan with checkpoints", () => {
     expect(result2.indexed).toBe(1);
     const checkpoints = inst.db.prepare("SELECT * FROM file_checkpoints").all();
     expect(checkpoints.length).toBe(2);
+  });
+
+  it("does not advance checkpoint when another process holds the file lease", async () => {
+    const filePath = path.join(dir, "locked.md");
+    fs.writeFileSync(filePath, "# Locked\n\nContent.");
+
+    const lease = acquireRuntimeLease(inst.db, buildIndexLeaseKey(filePath), "other-process");
+    expect(lease.acquired).toBe(true);
+
+    const result = await diffScan(inst.db, dir);
+    expect(result.indexed).toBe(0);
+
+    const checkpoint = inst.db.prepare(
+      "SELECT * FROM file_checkpoints WHERE source_path = ?"
+    ).get(filePath);
+    expect(checkpoint).toBeUndefined();
+
+    releaseRuntimeLease(inst.db, buildIndexLeaseKey(filePath), "other-process");
   });
 
   // Test 7: file A,B exist → B indexed → A modified → diffScan detects A

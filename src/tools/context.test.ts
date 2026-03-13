@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
 import { memoryContext } from "./context.js";
+import { createCanonicalMemory } from "../core/canonical-memory.js";
 import { resetScopeConfigCache } from "../utils/scope.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -119,5 +120,47 @@ describe("memory.context", () => {
 
     const row = inst.db.prepare("SELECT access_count FROM memories WHERE id = ?").get("acc1") as { access_count: number };
     expect(row.access_count).toBe(1);
+  });
+
+  it("returns promoted canonical memories before duplicate raw chunks", () => {
+    insertMemory(inst.db, "raw1", "Authentication uses JWT access tokens.", "todait-backend", 0.6);
+    createCanonicalMemory(inst.db, {
+      id: "canon-1",
+      kind: "fact",
+      title: "Auth uses JWT",
+      content: "Authentication uses JWT access tokens.",
+      scope: "todait-backend",
+      importance: 0.9,
+      evidenceMemoryIds: ["raw1"],
+    });
+
+    const result = memoryContext(inst.db, {
+      cwd: "/workspace/todait/todait/todait-backend/src",
+      limit: 5,
+    });
+
+    expect(result.memories[0].isCanonical).toBe(true);
+    expect(result.memories[0].id).toBe("canon-1");
+    expect(result.memories.filter((memory) => memory.content === "Authentication uses JWT access tokens.")).toHaveLength(1);
+  });
+
+  it("excludes canonical memories that are not yet valid", () => {
+    createCanonicalMemory(inst.db, {
+      id: "future-canon",
+      kind: "fact",
+      title: "Future rollout",
+      content: "The API will migrate to GraphQL next quarter.",
+      scope: "todait-backend",
+      importance: 0.9,
+      validFrom: "2999-01-01T00:00:00.000Z",
+      evidenceMemoryIds: [],
+    });
+
+    const result = memoryContext(inst.db, {
+      cwd: "/workspace/todait/todait/todait-backend/src",
+      limit: 5,
+    });
+
+    expect(result.memories.some((memory) => memory.id === "future-canon")).toBe(false);
   });
 });

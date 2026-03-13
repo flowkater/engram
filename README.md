@@ -6,7 +6,7 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 
 ## Features
 
-- **10 MCP Tools**: add, search, context, summary, ingest, prune, stats, graph, health, restore
+- **11 MCP Tools**: add, search, context, summary, ingest, prune, stats, graph, health, restore, promote
 - **Hybrid Search**: Vector similarity (sqlite-vec) + FTS5 keyword + RRF merge + adaptive fetch
 - **Obsidian Integration**: Auto-indexes vault, watches for changes, diff scan on restart
 - **Multi-Agent**: Codex CLI, Claude Code, OpenClaw share one memory store
@@ -17,7 +17,7 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 
 ## Quick Start (로컬 테스트)
 
-```bash
+```bash~
 # 1. Ollama 설치 & 임베딩 모델 다운로드
 brew install ollama        # macOS
 ollama serve &             # 백그라운드 실행
@@ -98,18 +98,19 @@ engram prune --days 180 --execute
 
 ## MCP Tools
 
-| Tool | Description |
-|------|-------------|
-| `memory.add` | Save a new memory with embedding |
-| `memory.search` | Semantic + keyword hybrid search (adaptive fetch) |
-| `memory.context` | Auto-load context by cwd scope (weighted scoring) |
-| `memory.summary` | Save session summary for continuity |
-| `memory.ingest` | Index files/directories into memory |
-| `memory.prune` | Clean old/unused memories (dry-run default) |
-| `memory.stats` | View store statistics |
-| `memory.graph` | Explore memory connections (UNION dedup, 1-3 hops) |
-| `memory.health` | Check DB integrity (orphans, model mismatch) |
-| `memory.restore` | Restore soft-deleted memory with re-embedding |
+| Tool             | Description                                        |
+| ---------------- | -------------------------------------------------- |
+| `memory.add`     | Save a new memory with embedding                   |
+| `memory.search`  | Semantic + keyword hybrid search (adaptive fetch)  |
+| `memory.context` | Auto-load context by cwd scope (weighted scoring)  |
+| `memory.summary` | Save session summary for continuity                |
+| `memory.ingest`  | Index files/directories into memory                |
+| `memory.prune`   | Clean old/unused memories (dry-run default)        |
+| `memory.stats`   | View store statistics                              |
+| `memory.graph`   | Explore memory connections (UNION dedup, 1-3 hops) |
+| `memory.health`  | Check DB integrity (orphans, model mismatch)       |
+| `memory.restore` | Restore soft-deleted memory with re-embedding      |
+| `memory.promote` | Promote raw memories into canonical facts/decisions |
 
 ## Scope Configuration
 
@@ -133,16 +134,41 @@ The `minScore` parameter in `memory.search` uses a **0~1 normalized scale** wher
 - If all results have identical RRF scores, they all get 1.0 (no differentiation possible)
 - Recommended: `minScore: 0.3` for loose filtering, `minScore: 0.7` for strict
 
+## Canonical Memory
+
+Phase 2 adds a separate canonical-memory layer on top of raw `memories`.
+
+- `memory.add` still stores raw evidence only
+- `memory.promote` creates canonical `fact` or `decision` memories from raw evidence
+- `memory.search` accepts optional `asOf` for time-aware canonical retrieval
+- canonical memories protect their linked raw evidence from automated prune
+
+## Background Workers
+
+Only one Engram process should run startup `diffScan`, watcher, and scheduler work for a shared DB/vault.
+
+- Engram now takes a DB lease so only one process owns background jobs at a time
+- Other concurrent MCP processes stay usable for read/write tools, but skip startup indexing work until they win the lease
+- If the current leader dies, a follower retries and takes over automatically after lease expiry
+- You can force-disable all startup background work with `ENGRAM_ENABLE_BACKGROUND_JOBS=false`
+
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MEMORY_DB` | `~/.engram/memory.db` | Database path |
-| `VAULT_PATH` | `~/Obsidian/flowkater/flowkater` | Obsidian vault path |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API URL |
-| `OLLAMA_MODEL` | `nomic-embed-text` | Embedding model |
-| `OPENAI_API_KEY` | — | Fallback embedding (optional) |
-| `ENGRAM_STRICT_LOCAL` | `true` | Block OpenAI fallback (set `false` to allow) |
+| Variable              | Default                      | Description                                 |
+| --------------------- | ---------------------------- | ------------------------------------------- |
+| `MEMORY_DB`           | `~/.engram/memory.db`        | Database path                               |
+| `VAULT_PATH`          | `~/Obsidian/flowkater/flowkater` | Obsidian vault path                     |
+| `OLLAMA_BASE_URL`     | `http://localhost:11434`     | Ollama API URL                              |
+| `OLLAMA_MODEL`        | `nomic-embed-text`           | Embedding model                             |
+| `OPENAI_API_KEY`      | —                            | Fallback embedding (explicit opt-in only)   |
+| `ENGRAM_STRICT_LOCAL` | `true`                       | Block OpenAI fallback; set `false` to allow |
+| `ENGRAM_ENABLE_BACKGROUND_JOBS` | `true`            | Enable startup diff scan, watcher, scheduler |
+| `ENGRAM_ENABLE_DIFF_SCAN` | `true`                   | Per-job override for startup diff scan      |
+| `ENGRAM_ENABLE_WATCHER` | `true`                    | Per-job override for watcher                |
+| `ENGRAM_ENABLE_SCHEDULER` | `true`                  | Per-job override for scheduler              |
+| `ENGRAM_BACKGROUND_LEASE_TTL_MS` | `60000`         | Background worker lease TTL; mainly for tests |
+| `ENGRAM_BACKGROUND_RENEW_MS` | `20000`            | Background worker renew cadence; mainly for tests |
+| `ENGRAM_BACKGROUND_RETRY_MS` | `5000`             | Follower retry cadence for background takeover |
 
 ## Development
 

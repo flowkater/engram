@@ -43,7 +43,13 @@ export function memoryPrune(
   const cutoffIso = cutoff.toISOString();
 
   // Build query
-  let whereClause = "deleted = 0 AND created_at < ? AND access_count <= ?";
+  let whereClause = `deleted = 0 AND created_at < ? AND access_count <= ?
+    AND id NOT IN (
+      SELECT ce.memory_id
+      FROM canonical_evidence ce
+      JOIN canonical_memories cm ON cm.id = ce.canonical_id
+      WHERE cm.valid_to IS NULL OR cm.valid_to >= datetime('now')
+    )`;
   const queryParams: unknown[] = [cutoffIso, minAccessCount];
 
   if (params.scope) {

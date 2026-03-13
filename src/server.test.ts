@@ -18,10 +18,11 @@ const ALL_TOOLS = [
   "memory.graph",
   "memory.health",
   "memory.restore",
+  "memory.promote",
 ];
 
 describe("MCP server tools", () => {
-  it("registers all 10 memory tools", async () => {
+  it("registers all 11 memory tools", async () => {
     const server = new McpServer({
       name: "unified-memory",
       version: "0.1.0",
@@ -48,6 +49,8 @@ describe("MCP server tools", () => {
       async () => ({ content: [{ type: "text" as const, text: "{}" }] }));
     server.tool("memory.restore", "Restore deleted memories", { id: z.string() },
       async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
+    server.tool("memory.promote", "Promote raw memories", { memoryIds: z.array(z.string()) },
+      async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -62,7 +65,7 @@ describe("MCP server tools", () => {
       expect(toolNames).toContain(tool);
     }
 
-    expect(tools).toHaveLength(10);
+    expect(tools).toHaveLength(11);
 
     await client.close();
     await server.close();

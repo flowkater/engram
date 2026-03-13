@@ -7,8 +7,11 @@ import fs from "node:fs";
 export interface StatsResult {
   total: number;
   deleted: number;
+  totalCanonical: number;
+  canonicalEvidenceLinks: number;
   byScope: Record<string, number>;
   bySource: Record<string, number>;
+  byCanonicalKind: Record<string, number>;
   dbSizeBytes: number;
   lastIndexed: string | null;
   oldestMemory: string | null;
@@ -22,6 +25,8 @@ export interface StatsResult {
 export function memoryStats(db: Database.Database, dbPath?: string): StatsResult {
   const total = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE deleted = 0").get() as { c: number }).c;
   const deleted = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE deleted = 1").get() as { c: number }).c;
+  const totalCanonical = (db.prepare("SELECT COUNT(*) as c FROM canonical_memories").get() as { c: number }).c;
+  const canonicalEvidenceLinks = (db.prepare("SELECT COUNT(*) as c FROM canonical_evidence").get() as { c: number }).c;
 
   // By scope
   const scopeRows = db.prepare(
@@ -36,6 +41,12 @@ export function memoryStats(db: Database.Database, dbPath?: string): StatsResult
   ).all() as Array<{ source: string; c: number }>;
   const bySource: Record<string, number> = {};
   for (const row of sourceRows) bySource[row.source] = row.c;
+
+  const canonicalKindRows = db.prepare(
+    "SELECT kind, COUNT(*) as c FROM canonical_memories GROUP BY kind ORDER BY c DESC"
+  ).all() as Array<{ kind: string; c: number }>;
+  const byCanonicalKind: Record<string, number> = {};
+  for (const row of canonicalKindRows) byCanonicalKind[row.kind] = row.c;
 
   // Timestamps
   const lastIndexed = (db.prepare(
@@ -62,8 +73,11 @@ export function memoryStats(db: Database.Database, dbPath?: string): StatsResult
   return {
     total,
     deleted,
+    totalCanonical,
+    canonicalEvidenceLinks,
     byScope,
     bySource,
+    byCanonicalKind,
     dbSizeBytes,
     lastIndexed,
     oldestMemory,

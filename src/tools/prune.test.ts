@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
 import { memoryPrune } from "./prune.js";
+import { createCanonicalMemory } from "../core/canonical-memory.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -75,5 +76,23 @@ describe("memory.prune", () => {
     const result = memoryPrune(inst.db, { olderThanDays: 90 });
     expect(result.candidates).toBe(0);
     expect(result.items).toHaveLength(0);
+  });
+
+  it("does not prune raw memories referenced by active canonical memories", () => {
+    insertOldMemory(inst.db, "protected-raw", 100, 0, "global");
+    createCanonicalMemory(inst.db, {
+      id: "canon-protected",
+      kind: "fact",
+      title: "Protected fact",
+      content: "Protected fact content",
+      scope: "global",
+      evidenceMemoryIds: ["protected-raw"],
+    });
+
+    const result = memoryPrune(inst.db, { olderThanDays: 90, dryRun: false });
+    expect(result.pruned).toBe(0);
+
+    const row = inst.db.prepare("SELECT deleted FROM memories WHERE id = ?").get("protected-raw") as { deleted: number };
+    expect(row.deleted).toBe(0);
   });
 });

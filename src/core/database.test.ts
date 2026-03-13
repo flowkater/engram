@@ -39,6 +39,12 @@ describe("database", () => {
     expect(names).toContain("memory_fts");
     expect(names).toContain("memory_links");
     expect(names).toContain("sessions");
+    expect(names).toContain("runtime_leases");
+    expect(names).toContain("canonical_memories");
+    expect(names).toContain("canonical_evidence");
+    expect(names).toContain("canonical_edges");
+    expect(names).toContain("canonical_memory_fts");
+    expect(names).toContain("canonical_memory_vec");
   });
 
   it("uses WAL mode", () => {

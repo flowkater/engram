@@ -12,6 +12,7 @@ import { sha256 } from "../utils/hash.js";
 import { detectObsidianScope } from "../utils/scope.js";
 import { deleteRelatedRecords } from "../utils/delete-related.js";
 import { parseTags, insertTags } from "../utils/tags.js";
+import { acquireRuntimeLease, buildIndexLeaseKey, releaseRuntimeLease, renewRuntimeLease } from "./runtime-leases.js";
 import pLimit from "p-limit";
 // NOTE: pLimit(3) here is independent of watcher.ts's Semaphore(3).
 // Watcher limits concurrent file processing; this limits concurrent embedding API calls within a single indexFile call.
@@ -31,7 +32,11 @@ export interface IndexResult {
   file: string;
   chunks: number;
   skipped: boolean;
+  reason?: "indexed" | "unchanged" | "locked" | "empty";
 }
+
+const INDEX_LEASE_MS = 5 * 60 * 1000;
+const INDEX_LEASE_HEARTBEAT_MS = 60 * 1000;
 
 /**
  * Check if a file is already indexed with the same hash.
@@ -86,111 +91,132 @@ export async function indexFile(
 
   // Skip if already indexed with same hash
   if (isAlreadyIndexed(db, relativePath, hash)) {
-    return { file: relativePath, chunks: 0, skipped: true };
+    return { file: relativePath, chunks: 0, skipped: true, reason: "unchanged" };
   }
 
-  // Remove old chunks for this file (including FTS/vec/links)
-  softDeleteByPath(db, relativePath);
-
-  // Determine chunk options
-  const chunkOpts = opts.chunkOpts ||
-    (opts.source === "memory-md" ? MEMORY_MD_CHUNK_OPTS : OBSIDIAN_CHUNK_OPTS);
-
-  // Chunk the content
-  const chunks = chunkMarkdown(content, chunkOpts);
-  if (chunks.length === 0) {
-    return { file: relativePath, chunks: 0, skipped: false };
+  const leaseKey = buildIndexLeaseKey(relativePath);
+  const leaseOwner = uuidv7();
+  const lease = acquireRuntimeLease(db, leaseKey, leaseOwner, INDEX_LEASE_MS);
+  if (!lease.acquired) {
+    return { file: relativePath, chunks: 0, skipped: true, reason: "locked" };
   }
 
-  // Determine scope
-  const scope = opts.scope || chunks[0].meta.scope || detectObsidianScope(relativePath);
-  const importance = opts.importance ?? 0.5;
+  const heartbeat = setInterval(() => {
+    renewRuntimeLease(db, leaseKey, leaseOwner, INDEX_LEASE_MS);
+  }, INDEX_LEASE_HEARTBEAT_MS);
 
-  // Insert each chunk
-  const insertMemory = db.prepare(`
-    INSERT INTO memories (id, content, summary, source, source_path, source_hash, chunk_index, scope, agent, tags, importance, created_at, updated_at, embed_model)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const insertVec = db.prepare(
-    "INSERT INTO memory_vec (id, embedding) VALUES (?, ?)"
-  );
-  const insertFts = db.prepare(
-    "INSERT INTO memory_fts (id, content, summary, tags, scope) VALUES (?, ?, ?, ?, ?)"
-  );
-  const insertLink = db.prepare(`
-    INSERT OR IGNORE INTO memory_links (from_id, to_id, link_type, weight, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-
-  const chunkIds: string[] = [];
-
-  // Pre-compute embeddings outside transaction (network I/O)
-  // Skip chunks that fail embedding (e.g. Ollama YAML parse errors on certain content)
-  const embedResults: (EmbedResult | null)[] = [];
-  for (const chunk of chunks) {
-    try {
-      const result = await embed(chunk.text, opts.embedOpts, true);
-      embedResults.push(result);
-    } catch (err) {
-      console.warn(`[indexer] Skipping chunk ${chunk.index} of ${relativePath}: ${(err as Error).message}`);
-      embedResults.push(null);
+  try {
+    // Re-check after lease acquisition because another process may have finished first.
+    if (isAlreadyIndexed(db, relativePath, hash)) {
+      return { file: relativePath, chunks: 0, skipped: true, reason: "unchanged" };
     }
-  }
 
-  // Atomic insert of all chunks (skip failed embeddings)
-  db.transaction(() => {
-    for (let ci = 0; ci < chunks.length; ci++) {
-      const chunk = chunks[ci];
-      const embedResult = embedResults[ci];
-      if (!embedResult) continue; // skip chunks with failed embeddings
-      const id = uuidv7();
-      const now = new Date().toISOString();
-      const tags = JSON.stringify(chunk.meta.tags || []);
-      const chunkScope = chunk.meta.scope || scope;
+    // Remove old chunks for this file (including FTS/vec/links)
+    softDeleteByPath(db, relativePath);
 
-      insertMemory.run(
-        id, chunk.text, null, opts.source, relativePath, hash,
-        chunk.index, chunkScope, null, tags, importance, now, now, embedResult.model
-      );
-      insertVec.run(id, Buffer.from(embedResult.embedding.buffer));
-      insertFts.run(id, chunk.text, "", tags, chunkScope);
-      insertTags(db, id, parseTags(chunk.meta.tags));
-      chunkIds.push(id);
+    // Determine chunk options
+    const chunkOpts = opts.chunkOpts ||
+      (opts.source === "memory-md" ? MEMORY_MD_CHUNK_OPTS : OBSIDIAN_CHUNK_OPTS);
 
-      // Extract wikilinks and create link records to existing memories
-      const wikiLinks = extractWikiLinks(chunk.text);
-      for (const linkName of wikiLinks) {
-        // Exact filename match: "name.md" or "*/name.md"
-        const targets = db.prepare(
-          "SELECT DISTINCT id FROM memories WHERE deleted = 0 AND (source_path = ? OR source_path LIKE ?) LIMIT 5"
-        ).all(`${linkName}.md`, `%/${linkName}.md`) as Array<{ id: string }>;
+    // Chunk the content
+    const chunks = chunkMarkdown(content, chunkOpts);
+    if (chunks.length === 0) {
+      return { file: relativePath, chunks: 0, skipped: false, reason: "empty" };
+    }
 
-        for (const target of targets) {
-          if (target.id !== id) {
-            insertLink.run(id, target.id, "wikilink", 1.0, new Date().toISOString());
+    // Determine scope
+    const scope = opts.scope || chunks[0].meta.scope || detectObsidianScope(relativePath);
+    const importance = opts.importance ?? 0.5;
+
+    // Insert each chunk
+    const insertMemory = db.prepare(`
+      INSERT INTO memories (id, content, summary, source, source_path, source_hash, chunk_index, scope, agent, tags, importance, created_at, updated_at, embed_model)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertVec = db.prepare(
+      "INSERT INTO memory_vec (id, embedding) VALUES (?, ?)"
+    );
+    const insertFts = db.prepare(
+      "INSERT INTO memory_fts (id, content, summary, tags, scope) VALUES (?, ?, ?, ?, ?)"
+    );
+    const insertLink = db.prepare(`
+      INSERT OR IGNORE INTO memory_links (from_id, to_id, link_type, weight, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    const chunkIds: string[] = [];
+
+    // Pre-compute embeddings outside transaction (network I/O)
+    // Skip chunks that fail embedding (e.g. Ollama YAML parse errors on certain content)
+    const embedResults: (EmbedResult | null)[] = [];
+    for (const chunk of chunks) {
+      try {
+        const result = await embed(chunk.text, opts.embedOpts, true);
+        embedResults.push(result);
+      } catch (err) {
+        console.warn(`[indexer] Skipping chunk ${chunk.index} of ${relativePath}: ${(err as Error).message}`);
+        embedResults.push(null);
+      }
+    }
+
+    // Atomic insert of all chunks (skip failed embeddings)
+    db.transaction(() => {
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const chunk = chunks[ci];
+        const embedResult = embedResults[ci];
+        if (!embedResult) continue; // skip chunks with failed embeddings
+        const id = uuidv7();
+        const now = new Date().toISOString();
+        const tags = JSON.stringify(chunk.meta.tags || []);
+        const chunkScope = chunk.meta.scope || scope;
+
+        insertMemory.run(
+          id, chunk.text, null, opts.source, relativePath, hash,
+          chunk.index, chunkScope, null, tags, importance, now, now, embedResult.model
+        );
+        insertVec.run(id, Buffer.from(embedResult.embedding.buffer));
+        insertFts.run(id, chunk.text, "", tags, chunkScope);
+        insertTags(db, id, parseTags(chunk.meta.tags));
+        chunkIds.push(id);
+
+        // Extract wikilinks and create link records to existing memories
+        const wikiLinks = extractWikiLinks(chunk.text);
+        for (const linkName of wikiLinks) {
+          // Exact filename match: "name.md" or "*/name.md"
+          const targets = db.prepare(
+            "SELECT DISTINCT id FROM memories WHERE deleted = 0 AND (source_path = ? OR source_path LIKE ?) LIMIT 5"
+          ).all(`${linkName}.md`, `%/${linkName}.md`) as Array<{ id: string }>;
+
+          for (const target of targets) {
+            if (target.id !== id) {
+              insertLink.run(id, target.id, "wikilink", 1.0, new Date().toISOString());
+            }
+          }
+        }
+
+        // Create tag-based links to other memories with same tags (via memory_tags index)
+        const chunkTags = parseTags(chunk.meta.tags);
+        if (chunkTags.length > 0) {
+          for (const tag of chunkTags) {
+            const tagMatches = db.prepare(
+              `SELECT DISTINCT mt.memory_id AS id FROM memory_tags mt
+               JOIN memories m ON m.id = mt.memory_id
+               WHERE mt.tag = ? AND mt.memory_id != ? AND m.deleted = 0 LIMIT 10`
+            ).all(tag, id) as Array<{ id: string }>;
+
+            for (const match of tagMatches) {
+              insertLink.run(id, match.id, "tag", 0.5, new Date().toISOString());
+            }
           }
         }
       }
+    })();
 
-      // Create tag-based links to other memories with same tags (via memory_tags index)
-      const chunkTags = parseTags(chunk.meta.tags);
-      if (chunkTags.length > 0) {
-        for (const tag of chunkTags) {
-          const tagMatches = db.prepare(
-            `SELECT DISTINCT mt.memory_id AS id FROM memory_tags mt
-             JOIN memories m ON m.id = mt.memory_id
-             WHERE mt.tag = ? AND mt.memory_id != ? AND m.deleted = 0 LIMIT 10`
-          ).all(tag, id) as Array<{ id: string }>;
-
-          for (const match of tagMatches) {
-            insertLink.run(id, match.id, "tag", 0.5, new Date().toISOString());
-          }
-        }
-      }
-    }
-  })();
-
-  return { file: relativePath, chunks: chunks.length, skipped: false };
+    return { file: relativePath, chunks: chunks.length, skipped: false, reason: "indexed" };
+  } finally {
+    clearInterval(heartbeat);
+    releaseRuntimeLease(db, leaseKey, leaseOwner);
+  }
 }
 
 /**

@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
+import { createCanonicalMemory } from "../core/canonical-memory.js";
 import { memoryStats } from "./stats.js";
 import path from "node:path";
 import os from "node:os";
@@ -61,5 +62,20 @@ describe("memory.stats", () => {
 
     const stats = memoryStats(inst.db);
     expect(stats.totalSessions).toBe(2);
+  });
+
+  it("includes canonical memory counts", () => {
+    createCanonicalMemory(inst.db, {
+      id: "canon-1",
+      kind: "fact",
+      title: "Auth uses JWT",
+      content: "Authentication uses JWT access tokens.",
+      scope: "global",
+      evidenceMemoryIds: [],
+    });
+
+    const stats = memoryStats(inst.db);
+    expect(stats.totalCanonical).toBe(1);
+    expect(stats.byCanonicalKind["fact"]).toBe(1);
   });
 });

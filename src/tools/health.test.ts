@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
+import { createCanonicalMemory } from "../core/canonical-memory.js";
 import { memoryHealth } from "./health.js";
 import path from "node:path";
 import os from "node:os";
@@ -92,5 +93,22 @@ describe("memory.health", () => {
     expect(Object.keys(result.modelMismatch).length).toBe(2);
     expect(result.modelMismatch["model-a"]).toBe(1);
     expect(result.modelMismatch["model-b"]).toBe(1);
+  });
+
+  it("reports orphaned canonical evidence", () => {
+    insertFullMemory(dbInstance.db, "raw1");
+    createCanonicalMemory(dbInstance.db, {
+      id: "canon-1",
+      kind: "fact",
+      title: "Auth uses JWT",
+      content: "Authentication uses JWT access tokens.",
+      scope: "global",
+      evidenceMemoryIds: ["raw1"],
+    });
+    dbInstance.db.prepare("UPDATE memories SET deleted = 1 WHERE id = ?").run("raw1");
+
+    const result = memoryHealth(dbInstance.db);
+    expect(result.orphanedCanonicalEvidence).toBe(1);
+    expect(result.healthy).toBe(false);
   });
 });

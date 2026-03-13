@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { openDatabase, type DatabaseInstance } from "./database.js";
 import { indexFile, indexDirectory, isAlreadyIndexed, softDeleteByPath } from "./indexer.js";
+import { acquireRuntimeLease, buildIndexLeaseKey, releaseRuntimeLease } from "./runtime-leases.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -199,5 +200,23 @@ describe("indexer", () => {
 
     expect(progress.length).toBeGreaterThanOrEqual(1);
     expect(progress[progress.length - 1][0]).toBe(progress[progress.length - 1][1]);
+  });
+
+  it("skips indexing when another process holds the file lease", async () => {
+    const dir = tmpDir();
+    const filePath = path.join(dir, "test.md");
+    fs.writeFileSync(filePath, "# Test\n\nLease protected content.");
+
+    const lease = acquireRuntimeLease(inst.db, buildIndexLeaseKey(filePath), "other-process");
+    expect(lease.acquired).toBe(true);
+
+    const result = await indexFile(inst.db, filePath, filePath, { source: "obsidian" });
+    expect(result.skipped).toBe(true);
+    expect(result.reason).toBe("locked");
+
+    const count = inst.db.prepare("SELECT COUNT(*) as c FROM memories WHERE source_path = ? AND deleted = 0").get(filePath) as { c: number };
+    expect(count.c).toBe(0);
+
+    releaseRuntimeLease(inst.db, buildIndexLeaseKey(filePath), "other-process");
   });
 });

@@ -1,0 +1,26 @@
+# Ralph Context Snapshot
+
+- task statement: Execute `docs/superpowers/plans/2026-03-13-background-worker-failover.md` on the current branch.
+- desired outcome: Engram background jobs automatically fail over to a follower process when the current leader exits, and a real two-process integration test proves startup coordination.
+- known facts/evidence:
+  - `src/server.ts` currently uses a single background-worker DB lease and skips startup jobs in follower processes.
+  - `src/core/indexer.ts` already has file-level leases that prevent duplicate embedding for the same file.
+  - Full verification previously passed for duplicate-prevention changes: `npm test` green and `npm run build` green.
+  - Residual reviewed risks were lack of leader re-election and lack of direct server-level integration coverage.
+- constraints:
+  - User explicitly requested same-branch execution, no separate worktree.
+  - Do not revert unrelated existing working tree changes.
+  - Schema changes must stay in `src/core/database.ts`.
+  - Must finish with fresh tests, fresh build, and architect-style verification.
+- unknowns/open questions:
+  - Smallest safe coordinator API that does not overcomplicate `server.ts`.
+  - Most deterministic way to run two real `tsx src/server.ts` processes in Vitest without requiring Ollama.
+- likely codebase touchpoints:
+  - `src/core/runtime-leases.ts`
+  - `src/core/background-worker.ts`
+  - `src/core/background-jobs.ts`
+  - `src/server.ts`
+  - `src/core/background-worker.test.ts`
+  - `src/core/background-jobs.test.ts`
+  - `test/e2e/background-worker-failover.test.ts`
+  - `README.md`

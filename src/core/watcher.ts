@@ -14,6 +14,8 @@ export interface WatcherOptions {
   vaultPath: string;
   source?: "obsidian" | "memory-md";
   debounceMs?: number;
+  usePolling?: boolean;
+  pollingInterval?: number;
   embedOpts?: EmbedderOptions;
   onIndexed?: (file: string, chunks: number) => void;
   onDeleted?: (file: string) => void;
@@ -108,7 +110,7 @@ export async function diffScan(
       const statAfter = fs.statSync(absPath);
       const mtimeAfter = statAfter.mtimeMs;
 
-      if (mtimeBefore === mtimeAfter) {
+      if (mtimeBefore === mtimeAfter && result.reason !== "locked") {
         // Safe to record checkpoint
         upsertCheckpoint.run(absPath, source, mtimeBefore, new Date().toISOString());
       }
@@ -177,6 +179,8 @@ export function startWatcher(
 ): WatcherInstance {
   const source = opts.source || "obsidian";
   const debounceMs = opts.debounceMs ?? 2000;
+  const usePolling = opts.usePolling ?? process.env.CHOKIDAR_USEPOLLING === "true";
+  const pollingInterval = opts.pollingInterval ?? 100;
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const vaultPath = path.resolve(opts.vaultPath);
 
@@ -184,6 +188,8 @@ export function startWatcher(
     persistent: true,
     ignoreInitial: true,
     followSymlinks: false,
+    usePolling,
+    interval: pollingInterval,
     ignored: (filePath: string) => {
       const rel = path.relative(vaultPath, filePath);
       if (rel === "") return false; // Don't ignore root

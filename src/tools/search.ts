@@ -12,6 +12,7 @@ export interface SearchParams {
   source?: string;
   agent?: string;
   minScore?: number;
+  asOf?: string;
 }
 
 export interface MemoryResult {
@@ -24,6 +25,11 @@ export interface MemoryResult {
   importance: number;
   created_at: string;
   score: number;
+  isCanonical?: boolean;
+  kind?: "fact" | "decision" | "raw";
+  valid_from?: string | null;
+  valid_to?: string | null;
+  decided_at?: string | null;
 }
 
 /**
@@ -36,10 +42,165 @@ export async function memorySearch(
 ): Promise<MemoryResult[]> {
   const limit = params.limit || 10;
   const minScore = params.minScore ?? 0.0;
+  const allowCanonical = !params.source && !params.agent;
 
   // Generate query embedding
   const queryEmbedding = await embed(params.query, embedOpts);
 
+  const canonicalResults = allowCanonical
+    ? searchCanonicalMemories(db, params, queryEmbedding, limit, minScore)
+    : [];
+  const rawResults = searchRawMemories(db, params, queryEmbedding, limit, minScore);
+  if (params.asOf) {
+    return canonicalResults.slice(0, limit);
+  }
+
+  const merged = [...canonicalResults];
+  for (const raw of rawResults) {
+    if (!canonicalResults.some((item) => item.content === raw.content && item.scope === raw.scope)) {
+      merged.push(raw);
+    }
+  }
+
+  return merged.slice(0, limit);
+}
+
+function searchCanonicalMemories(
+  db: Database.Database,
+  params: SearchParams,
+  queryEmbedding: Float32Array,
+  limit: number,
+  minScore: number
+): MemoryResult[] {
+  const filterConditions: string[] = [];
+  const filterParams: unknown[] = [];
+  if (params.scope) {
+    filterConditions.push("scope = ?");
+    filterParams.push(params.scope);
+  }
+  if (params.asOf) {
+    filterConditions.push("(valid_from IS NULL OR valid_from <= ?)");
+    filterParams.push(params.asOf);
+    filterConditions.push("(valid_to IS NULL OR valid_to >= ?)");
+    filterParams.push(params.asOf);
+  }
+  const whereClause = filterConditions.length > 0 ? `WHERE ${filterConditions.join(" AND ")}` : "";
+
+  const multipliers = [5, 10, 20];
+  let vecResults: Array<{ id: string; distance: number }> = [];
+  let ftsResults: Array<{ id: string; rank: number }> = [];
+
+  for (const multiplier of multipliers) {
+    const fetchLimit = limit * multiplier;
+    const vecRaw = db.prepare(`
+      SELECT id, distance
+      FROM canonical_memory_vec
+      WHERE embedding MATCH ?
+        AND k = ?
+      ORDER BY distance
+    `).all(Buffer.from(queryEmbedding.buffer), fetchLimit) as Array<{ id: string; distance: number }>;
+
+    vecResults = vecRaw;
+    if (vecRaw.length > 0) {
+      const vecIds = vecRaw.map((r) => r.id);
+      const ph = vecIds.map(() => "?").join(",");
+      const validIds = new Set(
+        (db.prepare(
+          `SELECT id FROM canonical_memories ${whereClause} ${whereClause ? "AND" : "WHERE"} id IN (${ph})`
+        ).all(...filterParams, ...vecIds) as Array<{ id: string }>).map((r) => r.id)
+      );
+      vecResults = vecRaw.filter((r) => validIds.has(r.id));
+    }
+
+    ftsResults = [];
+    try {
+      const ftsRaw = db.prepare(`
+        SELECT id, rank
+        FROM canonical_memory_fts
+        WHERE canonical_memory_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `).all(escapeFtsQuery(params.query), fetchLimit) as Array<{ id: string; rank: number }>;
+
+      if (ftsRaw.length > 0) {
+        const ftsIds = ftsRaw.map((r) => r.id);
+        const ph = ftsIds.map(() => "?").join(",");
+        const validIds = new Set(
+          (db.prepare(
+            `SELECT id FROM canonical_memories ${whereClause} ${whereClause ? "AND" : "WHERE"} id IN (${ph})`
+          ).all(...filterParams, ...ftsIds) as Array<{ id: string }>).map((r) => r.id)
+        );
+        ftsResults = ftsRaw.filter((r) => validIds.has(r.id));
+      }
+    } catch {
+      // fall through to vec-only
+    }
+
+    const uniqueIds = new Set([...vecResults.map((r) => r.id), ...ftsResults.map((r) => r.id)]);
+    if (uniqueIds.size >= limit || vecRaw.length < fetchLimit) break;
+  }
+
+  const merged = rrfMerge(
+    [vecResults.map((r) => ({ id: r.id })), ftsResults.map((r) => ({ id: r.id }))],
+    60,
+    limit
+  );
+  if (merged.length === 0) return [];
+
+  const maxScore = merged[0].score;
+  if (maxScore > 0) {
+    for (const item of merged) item.score = item.score / maxScore;
+  }
+  const filtered = merged.filter((r) => r.score >= minScore);
+  if (filtered.length === 0) return [];
+
+  const ids = filtered.map((r) => r.id);
+  const scoreMap = new Map(filtered.map((r) => [r.id, r.score]));
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT id, kind, title, content, scope, importance, created_at, valid_from, valid_to, decided_at
+    FROM canonical_memories
+    WHERE id IN (${placeholders})
+  `).all(...ids) as Array<{
+    id: string;
+    kind: "fact" | "decision";
+    title: string;
+    content: string;
+    scope: string;
+    importance: number;
+    created_at: string;
+    valid_from: string | null;
+    valid_to: string | null;
+    decided_at: string | null;
+  }>;
+
+  return rows
+    .map((row) => ({
+      id: row.id,
+      content: row.content,
+      summary: row.title,
+      source: "canonical",
+      scope: row.scope,
+      tags: [],
+      importance: row.importance,
+      created_at: row.created_at,
+      score: scoreMap.get(row.id) || 0,
+      isCanonical: true,
+      kind: row.kind,
+      valid_from: row.valid_from,
+      valid_to: row.valid_to,
+      decided_at: row.decided_at,
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
+function searchRawMemories(
+  db: Database.Database,
+  params: SearchParams,
+  queryEmbedding: Float32Array,
+  limit: number,
+  minScore: number
+): MemoryResult[] {
   // Build scope/source/agent filter conditions for SQL
   const filterConditions: string[] = ["deleted = 0"];
   const filterParams: unknown[] = [];
@@ -155,6 +316,7 @@ export async function memorySearch(
 
   // Filter by minScore
   const filtered = merged.filter((r) => r.score >= minScore);
+  if (filtered.length === 0) return [];
 
   // 4. Fetch full memory records
   const ids = filtered.map((r) => r.id);
@@ -194,6 +356,11 @@ export async function memorySearch(
       ...r,
       tags: JSON.parse(r.tags) as string[],
       score: scoreMap.get(r.id) || 0,
+      isCanonical: false,
+      kind: "raw" as const,
+      valid_from: null,
+      valid_to: null,
+      decided_at: null,
     }))
     .sort((a, b) => b.score - a.score);
 }
