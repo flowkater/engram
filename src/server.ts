@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /**
  * Engram MCP Server — stdio transport entry point.
- * Registers all 11 memory tools.
+ * Registers all 12 memory tools.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import path from "node:path";
 import fs from "node:fs";
-import { openDatabase } from "./core/database.js";
+import { openDatabase, runDatabaseMaintenance } from "./core/database.js";
 import { memoryAdd } from "./tools/add.js";
 import { memorySearch } from "./tools/search.js";
+import { memorySearchGraph } from "./tools/search-graph.js";
 import { memoryContext } from "./tools/context.js";
 import { memorySummary } from "./tools/summary.js";
 import { memoryIngest } from "./tools/ingest.js";
@@ -25,6 +26,7 @@ import { getCurrentModelName } from "./core/embedder.js";
 import { resolveBackgroundJobConfig } from "./core/runtime-leases.js";
 import { resolveBackgroundTiming, startBackgroundWorker, type BackgroundWorkerInstance } from "./core/background-worker.js";
 import { startBackgroundJobs } from "./core/background-jobs.js";
+import { appendSearchQueryLog, resolveSearchQueryLogPath } from "./core/query-log.js";
 
 const DB_PATH = process.env.MEMORY_DB ||
   path.join(process.env.HOME || "~", ".engram", "memory.db");
@@ -52,7 +54,7 @@ function log(message: string) {
 // Open database with error handling
 let dbInstance: ReturnType<typeof openDatabase>;
 try {
-  dbInstance = openDatabase(DB_PATH);
+  dbInstance = openDatabase(DB_PATH, { runMaintenance: false });
 } catch (err) {
   log(`Fatal: Failed to open database at ${DB_PATH}: ${(err as Error).message}`);
   process.exit(1);
@@ -95,6 +97,20 @@ function errorResponse(toolName: string, err: unknown) {
   return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true };
 }
 
+function safeAppendSearchQueryLog(entry: {
+  tool: "memory.search" | "memory.search_graph";
+  query: string;
+  scope?: string;
+  asOf?: string;
+  timestamp: string;
+}) {
+  try {
+    appendSearchQueryLog(resolveSearchQueryLogPath(), entry);
+  } catch (err) {
+    log(`query log append failed: ${(err as Error).message}`);
+  }
+}
+
 // --- memory.add ---
 server.tool(
   "memory.add",
@@ -134,9 +150,45 @@ server.tool(
     try {
       sessionTracker.recordActivity("memory.search", { query, scope, limit, source, agent, minScore, asOf });
       const results = await memorySearch(db, { query, scope, limit, source, agent, minScore, asOf });
+      safeAppendSearchQueryLog({
+        tool: "memory.search",
+        query,
+        scope,
+        asOf,
+        timestamp: new Date().toISOString(),
+      });
       return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
     } catch (err) {
       return errorResponse("memory.search", err);
+    }
+  }
+);
+
+// --- memory.context ---
+server.tool(
+  "memory.search_graph",
+  "Experimental canonical-first graph-assisted search.",
+  {
+    query: z.string().describe("Search query"),
+    scope: z.string().optional().describe("Project scope filter"),
+    limit: z.number().optional().describe("Max results (default 10)"),
+    asOf: z.string().optional().describe("Optional ISO timestamp for time-aware canonical search"),
+    hopDepth: z.union([z.literal(1), z.literal(2)]).optional().describe("Graph expansion depth"),
+  },
+  async ({ query, scope, limit, asOf, hopDepth }) => {
+    try {
+      sessionTracker.recordActivity("memory.search_graph", { query, scope, limit, asOf, hopDepth });
+      const results = await memorySearchGraph(db, { query, scope, limit, asOf, hopDepth });
+      safeAppendSearchQueryLog({
+        tool: "memory.search_graph",
+        query,
+        scope,
+        asOf,
+        timestamp: new Date().toISOString(),
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+    } catch (err) {
+      return errorResponse("memory.search_graph", err);
     }
   }
 );
@@ -358,12 +410,15 @@ async function main() {
       ownerId: backgroundOwnerId,
       ...resolveBackgroundTiming(),
       onLog: log,
-      startJobs: async () => startBackgroundJobs({
-        db,
-        vaultPath: VAULT_PATH,
-        backgroundConfig,
-        log,
-      }),
+      startJobs: async () => {
+        runDatabaseMaintenance(db, { log });
+        return startBackgroundJobs({
+          db,
+          vaultPath: VAULT_PATH,
+          backgroundConfig,
+          log,
+        });
+      },
     });
   } else {
     log("Background jobs disabled by environment");

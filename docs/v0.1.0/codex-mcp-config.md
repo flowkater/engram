@@ -2,22 +2,21 @@
 
 ## Setup
 
-Add the following to `~/.codex/config.json`:
+Add the following to `~/.codex/config.toml`:
 
-```json
-{
-  "mcpServers": {
-    "unified-memory": {
-      "command": "node",
-      "args": ["/Users/flowkater/.unified-memory/dist/server.js"],
-      "env": {
-        "MEMORY_DB": "/Users/flowkater/.unified-memory/memory.db",
-        "VAULT_PATH": "/Users/flowkater/Obsidian/flowkater/flowkater"
-      }
-    }
-  }
-}
+```toml
+[mcp_servers.engram]
+command = "/Users/flowkater/.volta/bin/node"
+args = ["/Users/flowkater/workspace/side/engram/dist/server.js"]
+enabled = true
+startup_timeout_sec = 30
+
+[mcp_servers.engram.env]
+MEMORY_DB = "/Users/flowkater/.engram/memory.db"
+VAULT_PATH = "/Users/flowkater/Obsidian/flowkater"
 ```
+
+Restart Codex after editing `config.toml`. MCP servers are loaded when the session starts.
 
 ## AGENTS.md Integration
 

@@ -69,7 +69,7 @@ export function acquireRuntimeLease(
     ).run(leaseKey, ownerId, expiresAt, nowIso);
 
     return { acquired: result.changes === 1, leaseKey, ownerId };
-  })();
+  }).immediate();
 }
 
 export function renewRuntimeLease(

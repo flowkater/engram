@@ -95,6 +95,46 @@ describe("background worker", () => {
     await worker.stop();
   });
 
+  it("stops jobs and retries when lease renew throws", async () => {
+    const events: string[] = [];
+    let renewCalls = 0;
+
+    const worker = startBackgroundWorker(inst.db, {
+      ownerId: "owner-a",
+      ...timings,
+      startJobs: async () => {
+        events.push("start");
+        return () => events.push("stop");
+      },
+      onLog: (msg) => events.push(msg),
+      leaseOps: {
+        acquire: () => ({
+          acquired: true,
+          leaseKey: DEFAULT_BACKGROUND_WORKER_LEASE_KEY,
+          ownerId: "owner-a",
+        }),
+        renew: () => {
+          renewCalls += 1;
+          if (renewCalls === 1) {
+            const error = new Error("database is locked");
+            (error as Error & { code?: string }).code = "SQLITE_BUSY";
+            throw error;
+          }
+          return true;
+        },
+        release: () => {},
+      },
+    });
+
+    await waitFor(() => events.includes("start"));
+    await waitFor(() => events.includes("Background worker lease renew failed: database is locked"));
+    await waitFor(() => events.includes("Background worker lease lost; stopping jobs"));
+    await waitFor(() => events.filter((event) => event === "start").length >= 2);
+
+    expect(events.filter((event) => event === "stop").length).toBeGreaterThanOrEqual(1);
+    await worker.stop();
+  });
+
   it("does not start jobs after stop is requested during async startup", async () => {
     const events: string[] = [];
     let resolveStartup: ((cleanup: () => void) => void) | null = null;

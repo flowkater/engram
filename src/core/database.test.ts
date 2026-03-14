@@ -1,8 +1,9 @@
 /**
  * Tests for database initialization and basic operations.
  */
-import { describe, it, expect, afterEach } from "vitest";
-import { openDatabase, type DatabaseInstance } from "./database.js";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import Database from "better-sqlite3";
+import { openDatabase, runDatabaseMaintenance, type DatabaseInstance } from "./database.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -118,6 +119,42 @@ describe("database", () => {
     expect(absRow.deleted).toBe(0);
   });
 
+  it("can skip legacy relative source_path maintenance during open", () => {
+    const p = tmpDbPath();
+    const inst1 = openDatabase(p);
+
+    const now = new Date().toISOString();
+    inst1.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, scope, tags, importance, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("rel-skip-1", "relative path record", "obsidian", "notes/test.md", "hash1", "global", "[]", 0.5, now, now, 0);
+    inst1.close();
+
+    const inst2 = openDatabase(p, { runMaintenance: false });
+    dbs.push(inst2);
+
+    const relRow = inst2.db.prepare("SELECT deleted FROM memories WHERE id = ?").get("rel-skip-1") as { deleted: number };
+    expect(relRow.deleted).toBe(0);
+  });
+
+  it("can run legacy relative source_path maintenance explicitly after open", () => {
+    const p = tmpDbPath();
+    const inst1 = openDatabase(p);
+
+    const now = new Date().toISOString();
+    inst1.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, scope, tags, importance, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("rel-maint-1", "relative path record", "obsidian", "notes/test.md", "hash1", "global", "[]", 0.5, now, now, 0);
+    inst1.close();
+
+    const inst2 = openDatabase(p, { runMaintenance: false });
+    dbs.push(inst2);
+
+    runDatabaseMaintenance(inst2.db);
+
+    const relRow = inst2.db.prepare("SELECT deleted FROM memories WHERE id = ?").get("rel-maint-1") as { deleted: number };
+    expect(relRow.deleted).toBe(1);
+  });
+
   it("new DB has embed_model column in CREATE TABLE", () => {
     const { db } = open();
     const cols = db.pragma("table_info(memories)") as Array<{ name: string }>;
@@ -136,5 +173,49 @@ describe("database", () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'")
       .get();
     expect(tables).toBeTruthy();
+  });
+
+  it("creates a partial unique index for active file-backed chunks when DB is clean", () => {
+    const { db } = open();
+    const index = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?"
+    ).get("idx_memories_active_file_chunk_unique") as { sql: string } | undefined;
+
+    expect(index?.sql).toContain("CREATE UNIQUE INDEX");
+    expect(index?.sql).toContain("ON memories(source_path, chunk_index)");
+    expect(index?.sql).toContain("WHERE deleted = 0");
+  });
+
+  it("skips recreating the active file-backed unique index while duplicates still exist", () => {
+    const p = tmpDbPath();
+    const inst1 = openDatabase(p);
+    inst1.db.exec("DROP INDEX IF EXISTS idx_memories_active_file_chunk_unique");
+
+    const now = new Date().toISOString();
+    inst1.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, chunk_index, scope, tags, importance, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("dup-a", "a", "obsidian", "/tmp/test.md", "hash-a", 0, "global", "[]", 0.5, now, now, 0);
+    inst1.db.prepare(
+      "INSERT INTO memories (id, content, source, source_path, source_hash, chunk_index, scope, tags, importance, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run("dup-b", "b", "obsidian", "/tmp/test.md", "hash-b", 0, "global", "[]", 0.5, now, now, 0);
+    inst1.close();
+
+    const inst2 = openDatabase(p);
+    dbs.push(inst2);
+    const skipped = inst2.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?"
+    ).get("idx_memories_active_file_chunk_unique");
+    expect(skipped).toBeUndefined();
+
+    inst2.db.prepare("UPDATE memories SET deleted = 1 WHERE id = ?").run("dup-b");
+    inst2.close();
+    dbs.pop();
+
+    const inst3 = openDatabase(p);
+    dbs.push(inst3);
+    const recreated = inst3.db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?"
+    ).get("idx_memories_active_file_chunk_unique");
+    expect(recreated).toBeTruthy();
   });
 });

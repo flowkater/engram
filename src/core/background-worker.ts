@@ -3,6 +3,7 @@ import {
   acquireRuntimeLease,
   DEFAULT_BACKGROUND_WORKER_LEASE_KEY,
   releaseRuntimeLease,
+  type RuntimeLeaseResult,
   renewRuntimeLease,
 } from "./runtime-leases.js";
 
@@ -14,6 +15,7 @@ export interface BackgroundWorkerOptions {
   leaseTtlMs: number;
   startJobs: () => Promise<(() => Promise<void> | void) | void>;
   onLog?: (message: string) => void;
+  leaseOps?: BackgroundWorkerLeaseOps;
 }
 
 export interface BackgroundWorkerInstance {
@@ -25,6 +27,26 @@ export interface BackgroundTiming {
   leaseTtlMs: number;
   renewMs: number;
   retryMs: number;
+}
+
+export interface BackgroundWorkerLeaseOps {
+  acquire: (
+    db: Database.Database,
+    leaseKey: string,
+    ownerId: string,
+    ttlMs: number
+  ) => RuntimeLeaseResult;
+  renew: (
+    db: Database.Database,
+    leaseKey: string,
+    ownerId: string,
+    ttlMs: number
+  ) => boolean;
+  release: (
+    db: Database.Database,
+    leaseKey: string,
+    ownerId: string
+  ) => void;
 }
 
 export function resolveBackgroundTiming(env: NodeJS.ProcessEnv = process.env): BackgroundTiming {
@@ -41,6 +63,11 @@ export function startBackgroundWorker(
 ): BackgroundWorkerInstance {
   const leaseKey = opts.leaseKey ?? DEFAULT_BACKGROUND_WORKER_LEASE_KEY;
   const onLog = opts.onLog ?? (() => {});
+  const leaseOps = opts.leaseOps ?? {
+    acquire: acquireRuntimeLease,
+    renew: renewRuntimeLease,
+    release: releaseRuntimeLease,
+  };
   let ownsLease = false;
   let runningJobs = false;
   let stopped = false;
@@ -86,9 +113,10 @@ export function startBackgroundWorker(
     renewTimer = setInterval(() => {
       let renewed = false;
       try {
-        renewed = renewRuntimeLease(db, leaseKey, opts.ownerId, opts.leaseTtlMs);
+        renewed = leaseOps.renew(db, leaseKey, opts.ownerId, opts.leaseTtlMs);
       } catch (err) {
         onLog(`Background worker lease renew failed: ${(err as Error).message}`);
+        void handleLostLease();
         return;
       }
       if (!renewed) {
@@ -110,7 +138,7 @@ export function startBackgroundWorker(
     if (stopped) return;
     let lease;
     try {
-      lease = acquireRuntimeLease(db, leaseKey, opts.ownerId, opts.leaseTtlMs);
+      lease = leaseOps.acquire(db, leaseKey, opts.ownerId, opts.leaseTtlMs);
     } catch (err) {
       onLog(`Background worker lease check failed: ${(err as Error).message}`);
       scheduleRetry();
@@ -142,7 +170,7 @@ export function startBackgroundWorker(
     } catch (err) {
       onLog(`Background worker failed to start jobs: ${(err as Error).message}`);
       ownsLease = false;
-      releaseRuntimeLease(db, leaseKey, opts.ownerId);
+      leaseOps.release(db, leaseKey, opts.ownerId);
       await stopRunningJobs();
       scheduleRetry();
     }
@@ -158,7 +186,7 @@ export function startBackgroundWorker(
       clearRetryTimer();
       clearRenewTimer();
       if (ownsLease) {
-        releaseRuntimeLease(db, leaseKey, opts.ownerId);
+        leaseOps.release(db, leaseKey, opts.ownerId);
       }
       ownsLease = false;
       await stopRunningJobs();

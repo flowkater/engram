@@ -1,5 +1,5 @@
 /**
- * Test: MCP server registers all 10 memory tools.
+ * Test: MCP server registers all memory tools.
  */
 import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -10,6 +10,7 @@ import { z } from "zod";
 const ALL_TOOLS = [
   "memory.add",
   "memory.search",
+  "memory.search_graph",
   "memory.context",
   "memory.summary",
   "memory.ingest",
@@ -22,7 +23,7 @@ const ALL_TOOLS = [
 ];
 
 describe("MCP server tools", () => {
-  it("registers all 11 memory tools", async () => {
+  it("registers all 12 memory tools", async () => {
     const server = new McpServer({
       name: "unified-memory",
       version: "0.1.0",
@@ -33,6 +34,8 @@ describe("MCP server tools", () => {
       async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
     server.tool("memory.search", "Hybrid search", { query: z.string() },
       async () => ({ content: [{ type: "text" as const, text: "[]" }] }));
+    server.tool("memory.search_graph", "Experimental graph search", { query: z.string() },
+      async () => ({ content: [{ type: "text" as const, text: "{}" }] }));
     server.tool("memory.context", "Auto-load context", {},
       async () => ({ content: [{ type: "text" as const, text: "{}" }] }));
     server.tool("memory.summary", "Save session summary", { summary: z.string() },
@@ -65,7 +68,7 @@ describe("MCP server tools", () => {
       expect(toolNames).toContain(tool);
     }
 
-    expect(tools).toHaveLength(11);
+    expect(tools).toHaveLength(12);
 
     await client.close();
     await server.close();

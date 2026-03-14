@@ -12,6 +12,7 @@ const DEFAULT_DB_PATH = path.join(
 );
 const DB_OPEN_RETRY_MS = 100;
 const DB_OPEN_RETRY_ATTEMPTS = 10;
+const ACTIVE_FILE_CHUNK_UNIQUE_INDEX = "idx_memories_active_file_chunk_unique";
 
 const SCHEMA_SQL = `
 -- Main memories table
@@ -211,16 +212,85 @@ function initCanonicalFts(db: Database.Database): void {
   }
 }
 
+function ensureActiveFileChunkUniqueIndex(db: Database.Database): void {
+  const existing = db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?"
+  ).get(ACTIVE_FILE_CHUNK_UNIQUE_INDEX);
+  if (existing) return;
+
+  const conflict = db.prepare(`
+    SELECT source_path
+    FROM memories
+    WHERE deleted = 0
+      AND source_path IS NOT NULL
+      AND source_path != ''
+    GROUP BY source_path, chunk_index
+    HAVING count(*) > 1
+    LIMIT 1
+  `).get() as { source_path: string } | undefined;
+
+  if (conflict) {
+    console.warn(
+      `[database] Skipping ${ACTIVE_FILE_CHUNK_UNIQUE_INDEX} creation; active file-backed duplicates remain`
+    );
+    return;
+  }
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ${ACTIVE_FILE_CHUNK_UNIQUE_INDEX}
+    ON memories(source_path, chunk_index)
+    WHERE deleted = 0
+      AND source_path IS NOT NULL
+      AND source_path != ''
+  `);
+}
+
 export interface DatabaseInstance {
   db: Database.Database;
   close(): void;
+}
+
+export interface OpenDatabaseOptions {
+  runMaintenance?: boolean;
+}
+
+export interface DatabaseMaintenanceOptions {
+  log?: (message: string) => void;
+}
+
+export function runDatabaseMaintenance(
+  db: Database.Database,
+  opts?: DatabaseMaintenanceOptions
+): void {
+  const log = opts?.log ?? console.warn;
+
+  const relativePaths = db.prepare(
+    "SELECT DISTINCT source_path FROM memories WHERE deleted = 0 AND source_path IS NOT NULL AND source_path != '' AND source_path NOT LIKE '/%'"
+  ).all() as Array<{ source_path: string }>;
+
+  if (relativePaths.length === 0) return;
+
+  log(
+    `[database] Found ${relativePaths.length} relative source_path(s) — soft-deleting legacy records`
+  );
+  const softDelete = db.prepare(
+    "UPDATE memories SET deleted = 1 WHERE source_path = ? AND deleted = 0"
+  );
+  db.transaction(() => {
+    for (const row of relativePaths) {
+      softDelete.run(row.source_path);
+    }
+  })();
 }
 
 /**
  * Open (or create) the unified memory database.
  * Initializes WAL mode, sqlite-vec, FTS5, and all schema tables.
  */
-export function openDatabase(dbPath: string = DEFAULT_DB_PATH): DatabaseInstance {
+export function openDatabase(
+  dbPath: string = DEFAULT_DB_PATH,
+  opts?: OpenDatabaseOptions
+): DatabaseInstance {
   // Ensure directory exists
   const dir = path.dirname(dbPath);
   if (!fs.existsSync(dir)) {
@@ -246,6 +316,7 @@ export function openDatabase(dbPath: string = DEFAULT_DB_PATH): DatabaseInstance
       initFts(db);
       initCanonicalVec(db);
       initCanonicalFts(db);
+      ensureActiveFileChunkUniqueIndex(db);
 
       // Add embed_model column if not present (migration)
       const cols = db.pragma("table_info(memories)") as Array<{ name: string }>;
@@ -253,23 +324,8 @@ export function openDatabase(dbPath: string = DEFAULT_DB_PATH): DatabaseInstance
         db.exec("ALTER TABLE memories ADD COLUMN embed_model TEXT");
       }
 
-      // Migration: soft-delete records with relative source_path (Phase 0 → Phase 1)
-      const relativePaths = db.prepare(
-        "SELECT DISTINCT source_path FROM memories WHERE deleted = 0 AND source_path IS NOT NULL AND source_path != '' AND source_path NOT LIKE '/%'"
-      ).all() as Array<{ source_path: string }>;
-
-      if (relativePaths.length > 0) {
-        console.warn(
-          `[database] Found ${relativePaths.length} relative source_path(s) — soft-deleting legacy records`
-        );
-        const softDelete = db.prepare(
-          "UPDATE memories SET deleted = 1 WHERE source_path = ? AND deleted = 0"
-        );
-        db.transaction(() => {
-          for (const row of relativePaths) {
-            softDelete.run(row.source_path);
-          }
-        })();
+      if (opts?.runMaintenance !== false) {
+        runDatabaseMaintenance(db);
       }
 
       return {

@@ -6,7 +6,7 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 
 ## Features
 
-- **11 MCP Tools**: add, search, context, summary, ingest, prune, stats, graph, health, restore, promote
+- **12 MCP Tools**: add, search, search_graph, context, summary, ingest, prune, stats, graph, health, restore, promote
 - **Hybrid Search**: Vector similarity (sqlite-vec) + FTS5 keyword + RRF merge + adaptive fetch
 - **Obsidian Integration**: Auto-indexes vault, watches for changes, diff scan on restart
 - **Multi-Agent**: Codex CLI, Claude Code, OpenClaw share one memory store
@@ -41,6 +41,8 @@ node dist/server.js        # Ctrl+C로 종료
 node dist/cli.js stats
 ```
 
+`node dist/server.js`를 터미널에서 직접 실행하면 보통 프롬프트가 돌아오지 않습니다. 이 서버는 stdio MCP 서버라서, MCP 클라이언트가 JSON-RPC 요청을 보내기 전까지 조용히 대기하는 것이 정상입니다.
+
 ## Prerequisites
 
 - **Node.js 22+**
@@ -74,9 +76,23 @@ npm run build
 }
 ```
 
-### Codex CLI (`~/.codex/config.json`)
+### Codex CLI (`~/.codex/config.toml`)
 
-Same format under `mcpServers` key.
+```toml
+[mcp_servers.engram]
+command = "/Users/flowkater/.volta/bin/node"
+args = ["/Users/flowkater/workspace/side/engram/dist/server.js"]
+enabled = true
+startup_timeout_sec = 30
+
+[mcp_servers.engram.env]
+MEMORY_DB = "/Users/flowkater/.engram/memory.db"
+VAULT_PATH = "/Users/flowkater/Obsidian/flowkater"
+```
+
+`node`는 절대 경로로 두는 편이 안전합니다. GUI/비로그인 셸 환경에서는 PATH가 달라져 bare `node`가 실패할 수 있습니다.
+
+Codex는 MCP 설정을 세션 시작 시 읽으므로, `config.toml` 수정 후에는 Codex 세션을 다시 시작해야 합니다.
 
 See `docs/` for detailed configuration guides.
 
@@ -102,6 +118,7 @@ engram prune --days 180 --execute
 | ---------------- | -------------------------------------------------- |
 | `memory.add`     | Save a new memory with embedding                   |
 | `memory.search`  | Semantic + keyword hybrid search (adaptive fetch)  |
+| `memory.search_graph` | Experimental canonical-first graph-assisted search |
 | `memory.context` | Auto-load context by cwd scope (weighted scoring)  |
 | `memory.summary` | Save session summary for continuity                |
 | `memory.ingest`  | Index files/directories into memory                |
@@ -143,6 +160,14 @@ Phase 2 adds a separate canonical-memory layer on top of raw `memories`.
 - `memory.search` accepts optional `asOf` for time-aware canonical retrieval
 - canonical memories protect their linked raw evidence from automated prune
 
+## Experimental Graph Search
+
+- `memory.search_graph` is an internal experiment and does not replace `memory.search`
+- search queries are logged to `~/.engram/logs/search-queries.jsonl` for offline evaluation
+- `ENGRAM_QUERY_LOG_PATH` overrides the default query-log file for isolated dev/test runs
+- offline evaluation uses canonical-derived temporary gold targets, not human labels
+- run `MEMORY_DB=/path/to/memory.db npx tsx scripts/eval-search-graph.ts` to compare baseline search and GraphRAG
+
 ## Background Workers
 
 Only one Engram process should run startup `diffScan`, watcher, and scheduler work for a shared DB/vault.
@@ -166,6 +191,7 @@ Only one Engram process should run startup `diffScan`, watcher, and scheduler wo
 | `ENGRAM_ENABLE_DIFF_SCAN` | `true`                   | Per-job override for startup diff scan      |
 | `ENGRAM_ENABLE_WATCHER` | `true`                    | Per-job override for watcher                |
 | `ENGRAM_ENABLE_SCHEDULER` | `true`                  | Per-job override for scheduler              |
+| `ENGRAM_QUERY_LOG_PATH` | `~/.engram/logs/search-queries.jsonl` | Override search-query log path          |
 | `ENGRAM_BACKGROUND_LEASE_TTL_MS` | `60000`         | Background worker lease TTL; mainly for tests |
 | `ENGRAM_BACKGROUND_RENEW_MS` | `20000`            | Background worker renew cadence; mainly for tests |
 | `ENGRAM_BACKGROUND_RETRY_MS` | `5000`             | Follower retry cadence for background takeover |

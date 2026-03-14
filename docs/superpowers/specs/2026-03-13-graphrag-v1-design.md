@@ -105,11 +105,63 @@ Expected inputs:
 
 Expected outputs:
 
-- ranked canonical-first results
-- optional supporting raw evidence references
+- ranked canonical-only results
 - graph payload that can later feed inspector tooling
 
 The output shape should be UI-agnostic so the same payload can power TUI, JSON export, and later web visualization.
+
+### Response Structure
+
+`memory.search_graph` should return two top-level artifacts:
+
+- `results`
+- `graph`
+
+The ranked `results` list is canonical-only.
+
+- do not place raw evidence directly in the top-level ranked list
+- keep the meaning of the ranked list consistent: these are the canonical truths the system is surfacing
+- expose raw evidence only through the graph payload
+
+Each ranked result should include at least:
+
+- canonical identity fields
+- ranking score
+- `hasConflict: boolean`
+
+`contradicts` should influence both ranking and visibility.
+
+- use contradiction as a rerank penalty or uncertainty signal
+- also expose an explicit `hasConflict` flag in each result item
+- keep the actual contradiction relationships in the graph payload
+
+### Graph Payload Shape
+
+The graph payload should use a standard graph JSON shape:
+
+- `nodes[]`
+- `edges[]`
+- `meta`
+
+This structure is preferred over nesting graph data inside individual result items because it is directly reusable for:
+
+- internal evaluation tooling
+- TUI inspection
+- JSON export
+- later Cytoscape.js rendering
+
+Raw evidence should appear only inside this graph payload and only when expanded from canonical nodes.
+
+### Graph Meta
+
+The first version of `meta` should include:
+
+- `seedCount`
+- `expandedNodeCount`
+- `hopDepth`
+- `rerankVersion`
+
+This is enough for v1 debugging and offline evaluation.
 
 ## Evaluation Strategy
 
@@ -164,6 +216,12 @@ Approved direction:
 - default view shows canonical nodes only
 - raw evidence expands on node click
 - user can switch between `1-hop` and `2-hop`
+
+The initial web inspector should optimize for topology inspection first:
+
+- graph node view is the primary surface
+- edge inspection is the second priority
+- score explanation remains secondary in the first UI pass
 
 The first web view is a graph explorer, not a graph editor.
 

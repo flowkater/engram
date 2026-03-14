@@ -80,4 +80,18 @@ describe("ENGRAM_STRICT_LOCAL", () => {
     const result = await embed("test text", undefined, true);
     expect(result.model).toBe("openai/text-embedding-3-small");
   });
+
+  it("uses deterministic mock embeddings when ENGRAM_MOCK_EMBEDDINGS=true", async () => {
+    process.env.ENGRAM_MOCK_EMBEDDINGS = "true";
+
+    const { embed } = await import("./embedder.js");
+
+    const first = await embed("test text", undefined, true);
+    const second = await embed("test text", undefined, true);
+    const third = await embed("different text", undefined, true);
+
+    expect(first.model).toBe("mock/nomic-embed-text");
+    expect(Array.from(first.embedding)).toEqual(Array.from(second.embedding));
+    expect(Array.from(first.embedding)).not.toEqual(Array.from(third.embedding));
+  });
 });

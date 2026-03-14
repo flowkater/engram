@@ -28,6 +28,11 @@ export interface EmbedResult {
 export async function embed(text: string, opts?: EmbedderOptions): Promise<Float32Array>;
 export async function embed(text: string, opts: EmbedderOptions | undefined, withModel: true): Promise<EmbedResult>;
 export async function embed(text: string, opts?: EmbedderOptions, withModel?: true): Promise<Float32Array | EmbedResult> {
+  if (process.env.ENGRAM_MOCK_EMBEDDINGS === "true") {
+    const embedding = createMockEmbedding(text);
+    return withModel ? { embedding, model: "mock/nomic-embed-text" } : embedding;
+  }
+
   // Sanitize: Ollama's nomic-embed-text can trigger YAML parsing on prompt text.
   // Strip frontmatter blocks entirely and normalize problematic patterns.
   const sanitized = text
@@ -129,3 +134,18 @@ async function embedOpenAI(text: string, apiKey: string): Promise<Float32Array> 
 }
 
 export { EMBEDDING_DIM };
+
+function createMockEmbedding(text: string): Float32Array {
+  let seed = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    seed = (seed * 31 + text.charCodeAt(index)) >>> 0;
+  }
+
+  const values = new Float32Array(EMBEDDING_DIM);
+  for (let index = 0; index < EMBEDDING_DIM; index += 1) {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    values[index] = (seed % 1000) / 1000;
+  }
+
+  return values;
+}

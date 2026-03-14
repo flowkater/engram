@@ -1,0 +1,24 @@
+# Context Snapshot
+
+- task statement: diagnose duplicate active memory rows, confirm cleanup strategy step-by-step, then implement and execute safe repair
+- desired outcome: identify duplicate classes, define keep/delete rule, implement dry-run + execute path, verify duplicates removed and tests/build still pass
+- known facts/evidence:
+  - background worker lease currently exists for one owner
+  - logs show repeated database is locked and background worker renew failures
+  - active duplicates exist for specific files, e.g. 종합 구조 초안 (EDITH).md with 375 active rows, and other files with 35x chunk duplicates
+  - duplicate canonical issue was already repaired separately; current issue is raw memories/index rows
+- constraints:
+  - main branch okay by prior explicit user consent
+  - use apply_patch for repo edits
+  - tests must pass before any commit
+  - do not ask for confirmation at every step; user wants continued execution
+- unknowns/open questions:
+  - exact safest keep-set rule per source_path/source_hash
+  - whether source_path IS NULL duplicates need separate handling now or later
+  - whether cleanup should also reset checkpoints and add DB guardrails
+- likely codebase touchpoints:
+  - src/core/indexer.ts
+  - src/core/background-worker.ts
+  - src/core/runtime-leases.ts
+  - src/utils/delete-related.ts
+  - tests around background worker / leases / indexer
