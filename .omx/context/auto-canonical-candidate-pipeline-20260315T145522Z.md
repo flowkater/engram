@@ -1,0 +1,29 @@
+# Ralph Context Snapshot
+
+- Task statement: Execute `/Users/flowkater/workspace/side/engram/docs/superpowers/plans/2026-03-15-auto-canonical-candidate-pipeline.md` on `master` with explicit user consent, using subagent-driven development where practical.
+- Desired outcome: `memory.add` aggressively creates canonical candidates, async background judging/merge works, `search_graph` returns separated `confirmed` and `candidates`, and all tests pass.
+- Known facts/evidence:
+  - Plan file exists at `docs/superpowers/plans/2026-03-15-auto-canonical-candidate-pipeline.md`.
+  - Chunk 1 and Chunk 2 were review-approved after iterative tightening.
+  - Chunk 3 still had review feedback around server bootstrap seams and worker teardown/shutdown semantics.
+  - User explicitly approved working on `master`.
+  - Repo rules require `npm test` full suite before any commit touching `src/**` or `test/**`.
+- Constraints:
+  - Follow repo `AGENTS.md` rules.
+  - Multi-table writes must use `db.transaction(() => { ... })()`.
+  - ESM imports require `.js` extensions.
+  - Do not start from a worktree; user explicitly requested direct work on `master`.
+- Unknowns/open questions:
+  - Final approved wording for Chunk 3 bootstrap/shutdown plan details.
+  - Whether Chunk 4 needs additional review tightening before implementation.
+  - Exact current shape of `src/server.ts` side effects and `background-jobs` lifecycle seams.
+- Likely codebase touchpoints:
+  - `src/core/canonical-candidates.ts`
+  - `src/core/canonical-memory.ts`
+  - `src/core/canonical-judge.ts`
+  - `src/core/ollama-client.ts`
+  - `src/core/canonical-candidate-worker.ts`
+  - `src/core/background-jobs.ts`
+  - `src/core/background-runtime.ts`
+  - `src/server.ts`
+  - `src/core/search-graph.ts`

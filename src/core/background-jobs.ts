@@ -2,10 +2,15 @@ import type Database from "better-sqlite3";
 import fs from "node:fs";
 import { diffScan, startWatcher, type WatcherInstance } from "./watcher.js";
 import { startScheduler, type SchedulerInstance } from "./scheduler.js";
+import {
+  startCanonicalCandidateWorker,
+  type CanonicalCandidateWorkerInstance,
+} from "./canonical-candidate-worker.js";
 import type { BackgroundJobConfig } from "./runtime-leases.js";
 
 type ClosableWatcher = Pick<WatcherInstance, "close">;
 type StoppableScheduler = Pick<SchedulerInstance, "stop">;
+type StoppableCandidateWorker = Pick<CanonicalCandidateWorkerInstance, "stop">;
 
 export interface BackgroundJobsArgs {
   db: Database.Database;
@@ -15,11 +20,13 @@ export interface BackgroundJobsArgs {
   runDiffScan?: () => Promise<void>;
   createWatcher?: () => Promise<ClosableWatcher>;
   createScheduler?: () => StoppableScheduler;
+  createCandidateWorker?: () => StoppableCandidateWorker;
 }
 
 export async function startBackgroundJobs(args: BackgroundJobsArgs): Promise<() => Promise<void>> {
   let watcher: ClosableWatcher | null = null;
   let scheduler: StoppableScheduler | null = null;
+  let candidateWorker: StoppableCandidateWorker | null = null;
 
   const needsVaultForRealWork =
     (args.backgroundConfig.diffScanEnabled && !args.runDiffScan) ||
@@ -61,8 +68,17 @@ export async function startBackgroundJobs(args: BackgroundJobsArgs): Promise<() 
         });
   }
 
+  if (args.backgroundConfig.backgroundEnabled) {
+    candidateWorker = args.createCandidateWorker
+      ? args.createCandidateWorker()
+      : startCanonicalCandidateWorker(args.db, {
+          onLog: args.log,
+        });
+  }
+
   return async () => {
     if (watcher) await watcher.close();
     if (scheduler) scheduler.stop();
+    if (candidateWorker) await candidateWorker.stop();
   };
 }

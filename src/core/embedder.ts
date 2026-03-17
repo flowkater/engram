@@ -2,10 +2,14 @@
  * Embedding client — Ollama (primary) + OpenAI (fallback).
  * Generates 768-dim vectors from text using nomic-embed-text.
  */
+import {
+  getOllamaBaseUrl,
+  getOllamaEmbeddingModelName,
+  OLLAMA_EMBEDDING_DIM,
+  requestOllamaEmbeddings,
+} from "./ollama-client.js";
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "nomic-embed-text";
-const EMBEDDING_DIM = 768;
+const EMBEDDING_DIM = OLLAMA_EMBEDDING_DIM;
 const STRICT_LOCAL = (process.env.ENGRAM_STRICT_LOCAL ?? "true") !== "false";
 // nomic-embed-text context limit is 8192 tokens (~28,000 chars)
 const MAX_EMBED_CHARS = 28_000;
@@ -41,8 +45,8 @@ export async function embed(text: string, opts?: EmbedderOptions, withModel?: tr
     .replace(/\n---\s*$/gm, "");
   // Truncate to stay within nomic-embed-text context limit (8192 tokens)
   const truncatedText = sanitized.length > MAX_EMBED_CHARS ? sanitized.slice(0, MAX_EMBED_CHARS) : sanitized;
-  const baseUrl = opts?.ollamaBaseUrl || OLLAMA_BASE_URL;
-  const model = opts?.ollamaModel || OLLAMA_MODEL;
+  const baseUrl = getOllamaBaseUrl(opts?.ollamaBaseUrl);
+  const model = getOllamaEmbeddingModelName(opts?.ollamaModel);
 
   try {
     const embedding = await embedOllama(truncatedText, baseUrl, model);
@@ -70,7 +74,7 @@ export async function embed(text: string, opts?: EmbedderOptions, withModel?: tr
  * Kept only for health-check model mismatch detection.
  */
 export function getCurrentModelName(opts?: EmbedderOptions): string {
-  return `ollama/${opts?.ollamaModel || OLLAMA_MODEL}`;
+  return `ollama/${getOllamaEmbeddingModelName(opts?.ollamaModel)}`;
 }
 
 async function embedOllama(text: string, baseUrl: string, model: string): Promise<Float32Array> {
@@ -80,25 +84,11 @@ async function embedOllama(text: string, baseUrl: string, model: string): Promis
   let lastError: Error | undefined;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const res = await fetch(`${baseUrl}/api/embeddings`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, prompt: text }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+      return await requestOllamaEmbeddings(text, {
+        baseUrl,
+        model,
+        timeoutMs: TIMEOUT_MS,
       });
-
-      if (!res.ok) {
-        throw new Error(`Ollama API error: ${res.status} ${res.statusText}`);
-      }
-
-      const data = (await res.json()) as { embedding: number[] };
-      if (!data.embedding || data.embedding.length !== EMBEDDING_DIM) {
-        throw new Error(
-          `Unexpected embedding dimension: got ${data.embedding?.length}, expected ${EMBEDDING_DIM}`
-        );
-      }
-
-      return new Float32Array(data.embedding);
     } catch (err) {
       lastError = err as Error;
       if (attempt < MAX_RETRIES) {

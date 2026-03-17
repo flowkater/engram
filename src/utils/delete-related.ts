@@ -1,5 +1,5 @@
 /**
- * Shared helper to clean up FTS, vec, and link records for a set of memory IDs.
+ * Shared helper to clean up FTS, vec, link, tag, and candidate records for a set of memory IDs.
  * Used by both softDeleteByPath (indexer) and memoryPrune (prune).
  */
 import type Database from "better-sqlite3";
@@ -7,7 +7,7 @@ import type Database from "better-sqlite3";
 const SQLITE_DELETE_BATCH_SIZE = 400;
 
 /**
- * Delete FTS, vec, and link entries for the given memory IDs.
+ * Delete FTS, vec, link, tag, and candidate entries for the given memory IDs.
  * Must be called within a transaction.
  */
 export function deleteRelatedRecords(db: Database.Database, ids: string[]): void {
@@ -20,5 +20,6 @@ export function deleteRelatedRecords(db: Database.Database, ids: string[]): void
     db.prepare(`DELETE FROM memory_vec WHERE id IN (${placeholders})`).run(...batch);
     db.prepare(`DELETE FROM memory_links WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})`).run(...batch, ...batch);
     db.prepare(`DELETE FROM memory_tags WHERE memory_id IN (${placeholders})`).run(...batch);
+    db.prepare(`DELETE FROM canonical_candidates WHERE raw_memory_id IN (${placeholders})`).run(...batch);
   }
 }

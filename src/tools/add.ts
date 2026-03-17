@@ -4,6 +4,14 @@
 import type Database from "better-sqlite3";
 import { v7 as uuidv7 } from "uuid";
 import { embed, type EmbedderOptions } from "../core/embedder.js";
+import {
+  buildCandidateFingerprint,
+  deriveCandidateContent,
+  deriveCandidateTitle,
+  enqueueCanonicalCandidate,
+  inferCandidateKind,
+  scoreCandidatePriority,
+} from "../core/canonical-candidates.js";
 import { parseTags, insertTags } from "../utils/tags.js";
 
 export interface AddParams {
@@ -59,6 +67,39 @@ export async function memoryAdd(
 
     // Insert normalized tags
     insertTags(db, id, parseTags(params.tags));
+
+    enqueueCanonicalCandidate(db, {
+      rawMemoryId: id,
+      scope,
+      candidateKind: inferCandidateKind({
+        content: params.content,
+        summary: params.summary,
+        tags: params.tags,
+      }),
+      candidateTitle: deriveCandidateTitle({
+        content: params.content,
+        summary: params.summary,
+      }),
+      candidateContent: deriveCandidateContent({
+        content: params.content,
+        summary: params.summary,
+      }),
+      priorityScore: scoreCandidatePriority({
+        content: params.content,
+        summary: params.summary,
+        tags: params.tags,
+        importance,
+      }),
+      contentFingerprint: buildCandidateFingerprint({
+        content: params.content,
+        summary: params.summary,
+        scope,
+        tags: params.tags,
+        importance,
+      }),
+      createdAt: now,
+      updatedAt: now,
+    });
   })();
 
   return { id, scope, created_at: now };

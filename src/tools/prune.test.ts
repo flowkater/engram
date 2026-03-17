@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
+import { enqueueCanonicalCandidate } from "../core/canonical-candidates.js";
 import { memoryPrune } from "./prune.js";
 import { createCanonicalMemory } from "../core/canonical-memory.js";
 import path from "node:path";
@@ -94,5 +95,29 @@ describe("memory.prune", () => {
 
     const row = inst.db.prepare("SELECT deleted FROM memories WHERE id = ?").get("protected-raw") as { deleted: number };
     expect(row.deleted).toBe(0);
+  });
+
+  it("removes canonical candidates for pruned raw memories", () => {
+    insertOldMemory(inst.db, "candidate-raw", 100, 0, "global");
+    enqueueCanonicalCandidate(inst.db, {
+      rawMemoryId: "candidate-raw",
+      scope: "global",
+      candidateKind: "fact",
+      candidateTitle: "Prunable candidate",
+      candidateContent: "Prunable candidate content",
+      priorityScore: 0.5,
+      contentFingerprint: "fp-prunable",
+      createdAt: "2026-03-01T00:00:00.000Z",
+      updatedAt: "2026-03-01T00:00:00.000Z",
+    });
+
+    const result = memoryPrune(inst.db, { olderThanDays: 90, dryRun: false });
+    expect(result.pruned).toBe(1);
+
+    const candidateRows = inst.db.prepare(
+      "SELECT COUNT(*) as count FROM canonical_candidates WHERE raw_memory_id = ?"
+    ).get("candidate-raw") as { count: number };
+
+    expect(candidateRows.count).toBe(0);
   });
 });

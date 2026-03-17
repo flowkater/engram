@@ -44,8 +44,47 @@ describe("database", () => {
     expect(names).toContain("canonical_memories");
     expect(names).toContain("canonical_evidence");
     expect(names).toContain("canonical_edges");
+    expect(names).toContain("canonical_candidates");
     expect(names).toContain("canonical_memory_fts");
     expect(names).toContain("canonical_memory_vec");
+  });
+
+  it("creates canonical candidate indexes and foreign keys", () => {
+    const { db } = open();
+
+    const indexes = db.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'index' AND tbl_name = 'canonical_candidates'
+      ORDER BY name
+    `).all() as Array<{ name: string }>;
+
+    expect(indexes.map((row) => row.name)).toEqual(expect.arrayContaining([
+      "idx_canonical_candidates_queue",
+      "idx_canonical_candidates_raw_scope_status",
+      "idx_canonical_candidates_raw_scope_fingerprint",
+    ]));
+
+    const foreignKeys = db.pragma("foreign_key_list(canonical_candidates)") as Array<{
+      table: string;
+      from: string;
+      to: string;
+      on_delete: string;
+    }>;
+
+    expect(foreignKeys).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        table: "memories",
+        from: "raw_memory_id",
+        to: "id",
+      }),
+      expect.objectContaining({
+        table: "canonical_memories",
+        from: "matched_canonical_id",
+        to: "id",
+        on_delete: "SET NULL",
+      }),
+    ]));
   });
 
   it("uses WAL mode", () => {

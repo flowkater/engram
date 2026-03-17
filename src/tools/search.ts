@@ -15,6 +15,14 @@ export interface SearchParams {
   asOf?: string;
 }
 
+export interface CanonicalSearchParams {
+  query: string;
+  scope?: string;
+  limit?: number;
+  minScore?: number;
+  asOf?: string;
+}
+
 export interface MemoryResult {
   id: string;
   content: string;
@@ -63,6 +71,17 @@ export async function memorySearch(
   }
 
   return merged.slice(0, limit);
+}
+
+export async function memorySearchCanonical(
+  db: Database.Database,
+  params: CanonicalSearchParams,
+  embedOpts?: EmbedderOptions
+): Promise<MemoryResult[]> {
+  const limit = params.limit || 10;
+  const minScore = params.minScore ?? 0.0;
+  const queryEmbedding = await embed(params.query, embedOpts);
+  return searchCanonicalMemories(db, params, queryEmbedding, limit, minScore);
 }
 
 function searchCanonicalMemories(

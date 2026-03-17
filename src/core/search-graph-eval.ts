@@ -55,7 +55,7 @@ export async function evaluateSearchGraphQueries(
     const baselineIds = baselineResults
       .filter((row) => row.isCanonical === true)
       .map((row) => row.id);
-    const graphIds = graphResults.results.map((row) => row.id);
+    const graphIds = graphResults.confirmed.map((row) => row.id);
 
     baselineTotals.hitAtK += computeHitAtK(baselineIds, goldIds);
     baselineTotals.mrr += computeReciprocalRank(baselineIds, goldIds);

@@ -50,6 +50,43 @@ export interface CanonicalSearchArtifactsInput {
   embedding: Float32Array;
 }
 
+export interface UpdateCanonicalMemoryInput {
+  id: string;
+  title: string;
+  content: string;
+  confidence: number;
+  updatedAt?: string;
+}
+
+export interface MergeCandidateIntoCanonicalInput {
+  canonicalId: string;
+  title: string;
+  content: string;
+  confidence: number;
+  evidenceMemoryIds: string[];
+  embedding: Float32Array;
+  updatedAt?: string;
+}
+
+export interface MergeCanonicalMemoriesInput {
+  sourceCanonicalId: string;
+  targetCanonicalId: string;
+  updatedAt?: string;
+}
+
+export interface NearbyCanonicalMemoryRow {
+  id: string;
+  kind: CanonicalKind;
+  title: string;
+  content: string;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+  valid_from: string | null;
+  valid_to: string | null;
+  decided_at: string | null;
+}
+
 export function createCanonicalMemory(
   db: Database.Database,
   input: CreateCanonicalMemoryInput
@@ -106,6 +143,176 @@ export function insertCanonicalSearchArtifacts(
   ).run(input.id, input.title, input.content, input.scope);
 }
 
+export function updateCanonicalMemory(
+  db: Database.Database,
+  input: UpdateCanonicalMemoryInput
+): void {
+  const now = input.updatedAt ?? new Date().toISOString();
+
+  db.prepare(`
+    UPDATE canonical_memories
+    SET title = ?, content = ?, confidence = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    input.title,
+    input.content,
+    input.confidence,
+    now,
+    input.id
+  );
+}
+
+export function appendCanonicalEvidence(
+  db: Database.Database,
+  canonicalId: string,
+  canonicalKind: CanonicalKind,
+  memoryIds: string[],
+  createdAt?: string
+): void {
+  const now = createdAt ?? new Date().toISOString();
+  const evidenceRole = canonicalKind === "decision" ? "decision-context" : "source";
+  const insertEvidence = db.prepare(`
+    INSERT OR IGNORE INTO canonical_evidence (canonical_id, memory_id, evidence_role, created_at)
+    VALUES (?, ?, ?, ?)
+  `);
+
+  for (const memoryId of memoryIds) {
+    insertEvidence.run(canonicalId, memoryId, evidenceRole, now);
+  }
+}
+
+export function replaceCanonicalSearchArtifacts(
+  db: Database.Database,
+  input: CanonicalSearchArtifactsInput
+): void {
+  db.prepare("DELETE FROM canonical_memory_vec WHERE id = ?").run(input.id);
+  db.prepare("DELETE FROM canonical_memory_fts WHERE id = ?").run(input.id);
+  insertCanonicalSearchArtifacts(db, input);
+}
+
+export function removeCanonicalSearchArtifacts(
+  db: Database.Database,
+  canonicalId: string
+): void {
+  db.prepare("DELETE FROM canonical_memory_vec WHERE id = ?").run(canonicalId);
+  db.prepare("DELETE FROM canonical_memory_fts WHERE id = ?").run(canonicalId);
+}
+
+export function mergeCandidateIntoCanonical(
+  db: Database.Database,
+  input: MergeCandidateIntoCanonicalInput
+): void {
+  const canonical = getCanonicalMemory(db, input.canonicalId);
+  if (!canonical) {
+    throw new Error(`Canonical memory not found: ${input.canonicalId}`);
+  }
+
+  const updatedAt = input.updatedAt ?? new Date().toISOString();
+  updateCanonicalMemory(db, {
+    id: input.canonicalId,
+    title: input.title,
+    content: input.content,
+    confidence: input.confidence,
+    updatedAt,
+  });
+  appendCanonicalEvidence(
+    db,
+    input.canonicalId,
+    canonical.kind,
+    input.evidenceMemoryIds,
+    updatedAt
+  );
+  replaceCanonicalSearchArtifacts(db, {
+    id: input.canonicalId,
+    title: input.title,
+    content: input.content,
+    scope: canonical.scope,
+    embedding: input.embedding,
+  });
+}
+
+export function mergeCanonicalMemories(
+  db: Database.Database,
+  input: MergeCanonicalMemoriesInput
+): void {
+  if (input.sourceCanonicalId === input.targetCanonicalId) {
+    throw new Error("sourceCanonicalId and targetCanonicalId must differ");
+  }
+
+  const source = getCanonicalMemory(db, input.sourceCanonicalId);
+  const target = getCanonicalMemory(db, input.targetCanonicalId);
+  if (!source || !target) {
+    throw new Error("Both source and target canonical memories must exist");
+  }
+
+  const now = input.updatedAt ?? new Date().toISOString();
+  const evidenceRows = listCanonicalEvidence(db, input.sourceCanonicalId);
+  appendCanonicalEvidence(
+    db,
+    input.targetCanonicalId,
+    target.kind,
+    evidenceRows.map((row) => row.memory_id),
+    now
+  );
+
+  if (source.confidence > target.confidence) {
+    updateCanonicalMemory(db, {
+      id: target.id,
+      title: target.title,
+      content: target.content,
+      confidence: source.confidence,
+      updatedAt: now,
+    });
+  }
+
+  const outgoingEdges = db.prepare(`
+    SELECT to_canonical_id, relation_type
+    FROM canonical_edges
+    WHERE from_canonical_id = ?
+  `).all(input.sourceCanonicalId) as Array<{
+    to_canonical_id: string;
+    relation_type: CanonicalRelationType;
+  }>;
+
+  for (const edge of outgoingEdges) {
+    if (edge.to_canonical_id === input.targetCanonicalId) continue;
+    addCanonicalEdge(db, {
+      fromId: input.targetCanonicalId,
+      toId: edge.to_canonical_id,
+      relationType: edge.relation_type,
+      createdAt: now,
+    });
+  }
+
+  const incomingEdges = db.prepare(`
+    SELECT from_canonical_id, relation_type
+    FROM canonical_edges
+    WHERE to_canonical_id = ?
+  `).all(input.sourceCanonicalId) as Array<{
+    from_canonical_id: string;
+    relation_type: CanonicalRelationType;
+  }>;
+
+  for (const edge of incomingEdges) {
+    if (edge.from_canonical_id === input.targetCanonicalId) continue;
+    if (edge.relation_type === "supersedes") continue;
+    addCanonicalEdge(db, {
+      fromId: edge.from_canonical_id,
+      toId: input.targetCanonicalId,
+      relationType: edge.relation_type,
+      createdAt: now,
+    });
+  }
+
+  addCanonicalEdge(db, {
+    fromId: input.targetCanonicalId,
+    toId: input.sourceCanonicalId,
+    relationType: "supersedes",
+    createdAt: now,
+  });
+  removeCanonicalSearchArtifacts(db, input.sourceCanonicalId);
+}
+
 export function addCanonicalEdge(
   db: Database.Database,
   input: AddCanonicalEdgeInput
@@ -148,4 +355,21 @@ export function listCanonicalEvidence(
     WHERE canonical_id = ?
     ORDER BY created_at ASC
   `).all(canonicalId) as Array<{ canonical_id: string; memory_id: string; evidence_role: string; created_at: string }>;
+}
+
+export function listNearbyCanonicalMemories(
+  db: Database.Database,
+  scope: string,
+  limit: number,
+  now: string
+): NearbyCanonicalMemoryRow[] {
+  return db.prepare(`
+    SELECT id, kind, title, content, confidence, created_at, updated_at, valid_from, valid_to, decided_at
+    FROM canonical_memories
+    WHERE scope = ?
+      AND (valid_from IS NULL OR valid_from <= ?)
+      AND (valid_to IS NULL OR valid_to >= ?)
+    ORDER BY confidence DESC, updated_at DESC, created_at DESC
+    LIMIT ?
+  `).all(scope, now, now, limit) as NearbyCanonicalMemoryRow[];
 }

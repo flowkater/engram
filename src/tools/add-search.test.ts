@@ -99,6 +99,32 @@ describe("memory.add + memory.search integration", () => {
     expect(row.access_count).toBe(1);
   });
 
+  it("keeps the new raw memory searchable immediately after candidate enqueue succeeds", async () => {
+    const added = await memoryAdd(inst.db, {
+      content: "JWT auth rollout is now enabled in production.",
+      summary: "JWT auth rollout",
+      scope: "todait-backend",
+      tags: ["auth", "rollout"],
+    });
+
+    const candidate = inst.db.prepare(`
+      SELECT raw_memory_id, status
+      FROM canonical_candidates
+      WHERE raw_memory_id = ?
+    `).get(added.id) as { raw_memory_id: string; status: string } | undefined;
+
+    const results = await memorySearch(inst.db, {
+      query: "JWT auth rollout",
+      scope: "todait-backend",
+    });
+
+    expect(candidate).toMatchObject({
+      raw_memory_id: added.id,
+      status: "queued",
+    });
+    expect(results.some((row) => row.id === added.id)).toBe(true);
+  });
+
   it("returns empty array for no matches", async () => {
     const results = await memorySearch(inst.db, {
       query: "nonexistent query xyz",

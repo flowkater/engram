@@ -13,7 +13,7 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 - **Graph Layer**: Normalized tag table + wikilink relationships with UNION dedup
 - **Scope Isolation**: Config-based project scoping (external `config.json`)
 - **Integrity**: Health checks, transactional writes, soft-delete with sync cleanup
-- **147 Tests**: Unit + E2E with fixture vault
+- **255 Tests**: Unit + E2E with fixture vault
 
 ## Quick Start (로컬 테스트)
 
@@ -29,7 +29,7 @@ npm install
 npm run build
 
 # 3. 테스트 실행 (Ollama 없이도 동작 — mock embedder)
-npm test                   # 147 tests expected
+npm test                   # 255 tests expected
 
 # 4. Obsidian vault 인덱싱
 node dist/cli.js index ~/Obsidian/flowkater/flowkater --source obsidian
@@ -155,14 +155,25 @@ The `minScore` parameter in `memory.search` uses a **0~1 normalized scale** wher
 
 Phase 2 adds a separate canonical-memory layer on top of raw `memories`.
 
-- `memory.add` still stores raw evidence only
+- `memory.add` stores raw evidence and aggressively enqueues one canonical candidate
 - `memory.promote` creates canonical `fact` or `decision` memories from raw evidence
 - `memory.search` accepts optional `asOf` for time-aware canonical retrieval
 - canonical memories protect their linked raw evidence from automated prune
+- async candidate judging runs only when background jobs are enabled
+
+Canonical flow:
+
+1. `memory.add` writes the raw memory plus one queued canonical candidate
+2. the background candidate worker asks a local Ollama judge to `approve`, `merge`, or `reject`
+3. approved candidates create or update canonical memories
+4. `memory.search_graph` returns `confirmed` canonicals separately from lower-confidence `candidates`
 
 ## Experimental Graph Search
 
 - `memory.search_graph` is an internal experiment and does not replace `memory.search`
+- response shape is `{ confirmed, candidates, graph }`
+- `confirmed` contains canonical facts/decisions only
+- `candidates` contains queued/processing/recently judged candidate records with status/confidence/rationale metadata
 - search queries are logged to `~/.engram/logs/search-queries.jsonl` for offline evaluation
 - `ENGRAM_QUERY_LOG_PATH` overrides the default query-log file for isolated dev/test runs
 - offline evaluation uses canonical-derived temporary gold targets, not human labels
@@ -170,7 +181,7 @@ Phase 2 adds a separate canonical-memory layer on top of raw `memories`.
 
 ## Background Workers
 
-Only one Engram process should run startup `diffScan`, watcher, and scheduler work for a shared DB/vault.
+Only one Engram process should run startup `diffScan`, watcher, scheduler, and canonical-candidate judging work for a shared DB/vault.
 
 - Engram now takes a DB lease so only one process owns background jobs at a time
 - Other concurrent MCP processes stay usable for read/write tools, but skip startup indexing work until they win the lease
@@ -185,6 +196,7 @@ Only one Engram process should run startup `diffScan`, watcher, and scheduler wo
 | `VAULT_PATH`          | `~/Obsidian/flowkater/flowkater` | Obsidian vault path                     |
 | `OLLAMA_BASE_URL`     | `http://localhost:11434`     | Ollama API URL                              |
 | `OLLAMA_MODEL`        | `nomic-embed-text`           | Embedding model                             |
+| `ENGRAM_CANONICAL_JUDGE_MODEL` | `llama3.2:3b`     | Local Ollama model for canonical candidate judging |
 | `OPENAI_API_KEY`      | —                            | Fallback embedding (explicit opt-in only)   |
 | `ENGRAM_STRICT_LOCAL` | `true`                       | Block OpenAI fallback; set `false` to allow |
 | `ENGRAM_ENABLE_BACKGROUND_JOBS` | `true`            | Enable startup diff scan, watcher, scheduler |
@@ -200,7 +212,7 @@ Only one Engram process should run startup `diffScan`, watcher, and scheduler wo
 
 ```bash
 npm run dev          # Run server in dev mode
-npm test             # Run all tests (147)
+npm test             # Run all tests (255)
 npm run test:watch   # Watch mode
 npm run build        # Build for production
 ```

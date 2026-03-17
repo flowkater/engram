@@ -133,6 +133,31 @@ CREATE TABLE IF NOT EXISTS canonical_edges (
 );
 CREATE INDEX IF NOT EXISTS idx_canonical_edges_from ON canonical_edges(from_canonical_id);
 CREATE INDEX IF NOT EXISTS idx_canonical_edges_to ON canonical_edges(to_canonical_id);
+
+CREATE TABLE IF NOT EXISTS canonical_candidates (
+  id TEXT PRIMARY KEY,
+  raw_memory_id TEXT NOT NULL REFERENCES memories(id),
+  scope TEXT NOT NULL DEFAULT 'global',
+  status TEXT NOT NULL CHECK (status IN ('queued','processing','approved','merged','rejected')),
+  candidate_kind TEXT NOT NULL CHECK (candidate_kind IN ('fact','decision','unknown')),
+  candidate_title TEXT,
+  candidate_content TEXT NOT NULL,
+  priority_score REAL NOT NULL DEFAULT 0,
+  confidence REAL,
+  rationale TEXT,
+  matched_canonical_id TEXT REFERENCES canonical_memories(id) ON DELETE SET NULL,
+  content_fingerprint TEXT NOT NULL,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  last_judged_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_canonical_candidates_queue
+ON canonical_candidates(status, priority_score DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_canonical_candidates_raw_scope_status
+ON canonical_candidates(raw_memory_id, scope, status);
+CREATE INDEX IF NOT EXISTS idx_canonical_candidates_raw_scope_fingerprint
+ON canonical_candidates(raw_memory_id, scope, content_fingerprint);
 `;
 
 /** Initialize the vector virtual table (sqlite-vec). */

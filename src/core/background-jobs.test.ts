@@ -52,4 +52,33 @@ describe("background jobs", () => {
     expect(starts).toContain("watcher-stop");
     expect(starts).toContain("scheduler-stop");
   });
+
+  it("starts the candidate worker even when vault prerequisites are absent", async () => {
+    const config: BackgroundJobConfig = {
+      backgroundEnabled: true,
+      diffScanEnabled: false,
+      watcherEnabled: false,
+      schedulerEnabled: false,
+    };
+    const starts: string[] = [];
+
+    const stop = await startBackgroundJobs({
+      db: inst.db,
+      vaultPath: "/tmp/does-not-exist",
+      backgroundConfig: config,
+      log: () => {},
+      createCandidateWorker: () => {
+        starts.push("candidate-worker");
+        return {
+          stop: async () => {
+            starts.push("candidate-worker-stop");
+          },
+        };
+      },
+    });
+
+    expect(starts).toEqual(["candidate-worker"]);
+    await stop();
+    expect(starts).toContain("candidate-worker-stop");
+  });
 });
