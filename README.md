@@ -13,7 +13,7 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 - **Graph Layer**: Normalized tag table + wikilink relationships with UNION dedup
 - **Scope Isolation**: Config-based project scoping (external `config.json`)
 - **Integrity**: Health checks, transactional writes, soft-delete with sync cleanup
-- **255 Tests**: Unit + E2E with fixture vault
+- **Comprehensive Tests**: Unit + E2E coverage for MCP tools, canonical pipeline, and server bootstrap
 
 ## Quick Start (로컬 테스트)
 
@@ -29,7 +29,7 @@ npm install
 npm run build
 
 # 3. 테스트 실행 (Ollama 없이도 동작 — mock embedder)
-npm test                   # 255 tests expected
+npm test
 
 # 4. Obsidian vault 인덱싱
 node dist/cli.js index ~/Obsidian/flowkater/flowkater --source obsidian
@@ -160,6 +160,8 @@ Phase 2 adds a separate canonical-memory layer on top of raw `memories`.
 - `memory.search` accepts optional `asOf` for time-aware canonical retrieval
 - canonical memories protect their linked raw evidence from automated prune
 - async candidate judging runs only when background jobs are enabled
+- `scripts/promote-project-seeds.ts` can seed canonicals from `Project/` notes
+- `scripts/backfill-project-graph.ts` can merge duplicates and backfill `supersedes` / `contradicts` edges
 
 Canonical flow:
 
@@ -174,6 +176,7 @@ Canonical flow:
 - response shape is `{ confirmed, candidates, graph }`
 - `confirmed` contains canonical facts/decisions only
 - `candidates` contains queued/processing/recently judged candidate records with status/confidence/rationale metadata
+- superseded canonicals are usually hidden from `confirmed`, but explicit version/history queries can still surface them
 - search queries are logged to `~/.engram/logs/search-queries.jsonl` for offline evaluation
 - `ENGRAM_QUERY_LOG_PATH` overrides the default query-log file for isolated dev/test runs
 - offline evaluation uses canonical-derived temporary gold targets, not human labels
@@ -187,6 +190,7 @@ Only one Engram process should run startup `diffScan`, watcher, scheduler, and c
 - Other concurrent MCP processes stay usable for read/write tools, but skip startup indexing work until they win the lease
 - If the current leader dies, a follower retries and takes over automatically after lease expiry
 - You can force-disable all startup background work with `ENGRAM_ENABLE_BACKGROUND_JOBS=false`
+- If background jobs are disabled, canonical candidates are still queued by `memory.add` but remain unjudged until a worker-enabled process runs
 
 ## Environment Variables
 
@@ -199,7 +203,7 @@ Only one Engram process should run startup `diffScan`, watcher, scheduler, and c
 | `ENGRAM_CANONICAL_JUDGE_MODEL` | `llama3.2:3b`     | Local Ollama model for canonical candidate judging |
 | `OPENAI_API_KEY`      | —                            | Fallback embedding (explicit opt-in only)   |
 | `ENGRAM_STRICT_LOCAL` | `true`                       | Block OpenAI fallback; set `false` to allow |
-| `ENGRAM_ENABLE_BACKGROUND_JOBS` | `true`            | Enable startup diff scan, watcher, scheduler |
+| `ENGRAM_ENABLE_BACKGROUND_JOBS` | `true`            | Enable startup diff scan, watcher, scheduler, and canonical candidate judging |
 | `ENGRAM_ENABLE_DIFF_SCAN` | `true`                   | Per-job override for startup diff scan      |
 | `ENGRAM_ENABLE_WATCHER` | `true`                    | Per-job override for watcher                |
 | `ENGRAM_ENABLE_SCHEDULER` | `true`                  | Per-job override for scheduler              |
@@ -212,9 +216,15 @@ Only one Engram process should run startup `diffScan`, watcher, scheduler, and c
 
 ```bash
 npm run dev          # Run server in dev mode
-npm test             # Run all tests (255)
+npm test             # Run the full test suite
 npm run test:watch   # Watch mode
 npm run build        # Build for production
+
+# Seed canonical memories from Project notes
+npx tsx scripts/promote-project-seeds.ts --tier a
+
+# Backfill graph edges / merge obvious duplicate canonicals
+npx tsx scripts/backfill-project-graph.ts --dry-run
 ```
 
 ## Architecture
