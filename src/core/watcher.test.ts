@@ -424,6 +424,26 @@ describe("diffScan with checkpoints", () => {
     expect(row).toBeDefined();
   });
 
+  // Test async: yields to event loop during scan
+  it("yields to event loop during scan (does not monopolize)", async () => {
+    // Create a tmp vault with 50 tiny .md files
+    const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-diff-vault-"));
+    for (let i = 0; i < 50; i++) {
+      fs.writeFileSync(path.join(vaultDir, `note-${i}.md`), `# note ${i}\nhello world ${i}`);
+    }
+    const localInst = openDatabase(path.join(os.tmpdir(), `engram-diff-${Date.now()}-${Math.random().toString(36).slice(2)}.db`));
+    try {
+      let loopTicked = false;
+      const ticker = setImmediate(() => { loopTicked = true; });
+      await diffScan(localInst.db, vaultDir, { onError: () => {} });
+      clearImmediate(ticker);
+      expect(loopTicked).toBe(true);
+    } finally {
+      localInst.close();
+      fs.rmSync(vaultDir, { recursive: true, force: true });
+    }
+  });
+
   // Test 14: file modified during indexing (mtime_before ≠ mtime_after) → checkpoint not recorded
   it("file modified during indexing → checkpoint not recorded", async () => {
     const filePath = path.join(dir, "racing.md");

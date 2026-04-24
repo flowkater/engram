@@ -47,25 +47,30 @@ export async function diffScan(
   const source = opts?.source || "obsidian";
   const resolvedVault = path.resolve(vaultPath);
 
-  // Walk vault for .md files
-  const mdFiles: string[] = [];
-  function walk(dir: string) {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  async function walk(dir: string): Promise<string[]> {
+    const out: string[] = [];
+    let entries;
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return out;
+    }
+    for (const entry of entries) {
       if (IGNORED_DIRS.includes(entry.name)) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        walk(full);
+        const sub = await walk(full);
+        out.push(...sub);
       } else if (entry.name.endsWith(".md")) {
-        mdFiles.push(full);
+        out.push(full);
       }
     }
+    return out;
   }
-  walk(resolvedVault);
 
-  // Build set of current vault files (absolute paths)
+  const mdFiles = await walk(resolvedVault);
   const currentFiles = new Set(mdFiles.map((f) => path.resolve(f)));
 
-  // Prepared statements
   const getCheckpoint = db.prepare(
     "SELECT file_mtime_ms FROM file_checkpoints WHERE source_path = ?"
   );
@@ -78,49 +83,39 @@ export async function diffScan(
 
   let scanned = 0;
   let indexed = 0;
+  const BATCH = 8;
 
-  // Index new/modified files
-  for (const absPath of mdFiles) {
-    scanned++;
-    try {
-      const stat = fs.statSync(absPath);
-      const mtimeBefore = stat.mtimeMs;
+  for (let i = 0; i < mdFiles.length; i += BATCH) {
+    const batch = mdFiles.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (absPath) => {
+      scanned++;
+      try {
+        const stat = await fs.promises.stat(absPath);
+        const mtimeBefore = stat.mtimeMs;
+        const cp = getCheckpoint.get(absPath) as { file_mtime_ms: number } | undefined;
+        if (cp && cp.file_mtime_ms >= mtimeBefore) return;
 
-      // Check checkpoint
-      const cp = getCheckpoint.get(absPath) as { file_mtime_ms: number } | undefined;
-
-      if (cp && cp.file_mtime_ms >= mtimeBefore) {
-        // File not modified since last checkpoint — skip
-        continue;
+        const result = await indexFile(db, absPath, absPath, {
+          source,
+          embedOpts: opts?.embedOpts,
+        });
+        if (!result.skipped) {
+          indexed++;
+          const relativePath = path.relative(resolvedVault, absPath);
+          opts?.onIndexed?.(relativePath, result.chunks);
+        }
+        const statAfter = await fs.promises.stat(absPath);
+        if (mtimeBefore === statAfter.mtimeMs && result.reason !== "locked") {
+          upsertCheckpoint.run(absPath, source, mtimeBefore, new Date().toISOString());
+        }
+      } catch (err) {
+        opts?.onError?.(err as Error);
       }
-
-      // File is new or modified — index it
-      const relativePath = path.relative(resolvedVault, absPath);
-      const result = await indexFile(db, absPath, absPath, {
-        source,
-        embedOpts: opts?.embedOpts,
-      });
-
-      if (!result.skipped) {
-        indexed++;
-        opts?.onIndexed?.(relativePath, result.chunks);
-      }
-
-      // Race condition check: verify file wasn't modified during indexing
-      const statAfter = fs.statSync(absPath);
-      const mtimeAfter = statAfter.mtimeMs;
-
-      if (mtimeBefore === mtimeAfter && result.reason !== "locked") {
-        // Safe to record checkpoint
-        upsertCheckpoint.run(absPath, source, mtimeBefore, new Date().toISOString());
-      }
-      // If mtime changed during indexing, skip checkpoint — next scan will re-process
-    } catch (err) {
-      opts?.onError?.(err as Error);
-    }
+    }));
+    await new Promise((r) => setImmediate(r));
   }
 
-  // Handle deleted files: checkpoints that no longer have files in vault
+  // Deletion pass
   const allCheckpoints = db.prepare(
     "SELECT source_path FROM file_checkpoints WHERE source = ?"
   ).all(source) as Array<{ source_path: string }>;
