@@ -124,30 +124,65 @@ export async function runGraphSearch(
   const seedScoreMap = new Map(seeds.map((row) => [row.id, row.score]));
   const propagatedScores = new Map(seeds.map((row) => [row.id, row.score]));
 
+  // Memo of canonical id -> row, so repeated visits across hops never re-fetch.
+  const nodeCache = new Map<string, CanonicalNodeRow | null>();
+  const visitedForEdges = new Set<string>();
+
   let frontier = new Set<string>(seeds.map((row) => row.id));
   for (let hop = 0; hop < hopDepth && frontier.size > 0; hop += 1) {
+    const frontierIds = Array.from(frontier).filter((id) => !visitedForEdges.has(id));
+    for (const id of frontierIds) visitedForEdges.add(id);
+
+    const edgeRows = fetchEdgesBatch(db, frontierIds);
+    const evidenceRows = fetchEvidenceBatch(db, frontierIds);
+
+    // Collect neighbor ids that aren't already materialized in the cache.
+    const neighborIdsToFetch: string[] = [];
+    const seenNeighbors = new Set<string>();
+    for (const row of edgeRows) {
+      const otherId = frontier.has(row.from_canonical_id)
+        ? row.to_canonical_id
+        : row.from_canonical_id;
+      if (seenNeighbors.has(otherId)) continue;
+      seenNeighbors.add(otherId);
+      if (!nodeCache.has(otherId)) {
+        neighborIdsToFetch.push(otherId);
+      }
+    }
+
+    // One batched IN(...) fetch per hop for all un-cached neighbors.
+    const fetched = fetchCanonicalNodesBatch(db, neighborIdsToFetch);
+    for (const id of neighborIdsToFetch) {
+      nodeCache.set(id, fetched.get(id) ?? null);
+    }
+
     const nextFrontier = new Set<string>();
+    // Preserve the original BFS semantics: each edge is evaluated once per
+    // frontier endpoint it touches, so propagation happens in both directions
+    // when both endpoints are in the frontier.
+    for (const row of edgeRows) {
+      const endpoints: Array<{ canonicalId: string; otherId: string }> = [];
+      if (frontier.has(row.from_canonical_id)) {
+        endpoints.push({ canonicalId: row.from_canonical_id, otherId: row.to_canonical_id });
+      }
+      if (frontier.has(row.to_canonical_id) && row.to_canonical_id !== row.from_canonical_id) {
+        endpoints.push({ canonicalId: row.to_canonical_id, otherId: row.from_canonical_id });
+      }
 
-    for (const canonicalId of frontier) {
-      const edgeRows = db.prepare(`
-        SELECT from_canonical_id, to_canonical_id, relation_type
-        FROM canonical_edges
-        WHERE from_canonical_id = ? OR to_canonical_id = ?
-      `).all(canonicalId, canonicalId) as Array<{
-        from_canonical_id: string;
-        to_canonical_id: string;
-        relation_type: "supersedes" | "contradicts";
-      }>;
+      // Emit the edge once, deduped by upsertEdge on its composite id.
+      // This must run even if the neighbor turned out to be missing for one
+      // endpoint path — but we only emit when at least one endpoint visit
+      // produced a visible neighbor. Track that via `emitted`.
+      let emitted = false;
 
-      for (const row of edgeRows) {
-        const otherId = row.from_canonical_id === canonicalId
-          ? row.to_canonical_id
-          : row.from_canonical_id;
-        const neighbor = getCanonicalNode(db, otherId);
+      for (const { canonicalId, otherId } of endpoints) {
+        const neighbor = nodeCache.get(otherId) ?? null;
         if (!neighbor || !isCanonicalVisible(neighbor, params.asOf)) continue;
 
         canonicalIds.add(neighbor.id);
-        nextFrontier.add(neighbor.id);
+        if (!visitedForEdges.has(neighbor.id)) {
+          nextFrontier.add(neighbor.id);
+        }
         const parentScore = propagatedScores.get(canonicalId) ?? seedScoreMap.get(canonicalId) ?? 0;
         const propagatedScore = parentScore * EDGE_PROPAGATION_DECAY;
         if (propagatedScore > (propagatedScores.get(neighbor.id) ?? 0)) {
@@ -158,37 +193,43 @@ export async function runGraphSearch(
           contradictionIds.add(otherId);
         }
 
-        upsertEdge(edges, {
-          id: `${row.relation_type}:${row.from_canonical_id}:${row.to_canonical_id}`,
-          source: row.from_canonical_id,
-          target: row.to_canonical_id,
-          type: row.relation_type,
-        });
+        if (!emitted) {
+          upsertEdge(edges, {
+            id: `${row.relation_type}:${row.from_canonical_id}:${row.to_canonical_id}`,
+            source: row.from_canonical_id,
+            target: row.to_canonical_id,
+            type: row.relation_type,
+          });
+          emitted = true;
+        }
       }
+    }
 
-      const evidenceRows = db.prepare(`
-        SELECT canonical_id, memory_id
-        FROM canonical_evidence
-        WHERE canonical_id = ?
-      `).all(canonicalId) as Array<{ canonical_id: string; memory_id: string }>;
-
-      for (const row of evidenceRows) {
-        rawIds.add(row.memory_id);
-        evidenceCounts.set(row.canonical_id, (evidenceCounts.get(row.canonical_id) || 0) + 1);
-        upsertEdge(edges, {
-          id: `canonical_evidence:${row.canonical_id}:${row.memory_id}`,
-          source: row.canonical_id,
-          target: row.memory_id,
-          type: "canonical_evidence",
-        });
-      }
+    for (const row of evidenceRows) {
+      rawIds.add(row.memory_id);
+      evidenceCounts.set(row.canonical_id, (evidenceCounts.get(row.canonical_id) || 0) + 1);
+      upsertEdge(edges, {
+        id: `canonical_evidence:${row.canonical_id}:${row.memory_id}`,
+        source: row.canonical_id,
+        target: row.memory_id,
+        type: "canonical_evidence",
+      });
     }
 
     frontier = nextFrontier;
   }
 
+  // Materialize any canonical ids not already in the cache (e.g., seeds).
+  const unmaterialized = Array.from(canonicalIds).filter((id) => !nodeCache.has(id));
+  if (unmaterialized.length > 0) {
+    const fetched = fetchCanonicalNodesBatch(db, unmaterialized);
+    for (const id of unmaterialized) {
+      nodeCache.set(id, fetched.get(id) ?? null);
+    }
+  }
+
   const canonicalRows = Array.from(canonicalIds)
-    .map((id) => getCanonicalNode(db, id))
+    .map((id) => nodeCache.get(id) ?? null)
     .filter((row): row is CanonicalNodeRow => Boolean(row))
     .filter((row) => isCanonicalVisible(row, params.asOf));
   const supersededIds = getSupersededIds(db, canonicalRows);
@@ -372,6 +413,52 @@ function getCanonicalNode(db: Database.Database, id: string): CanonicalNodeRow |
     FROM canonical_memories
     WHERE id = ?
   `).get(id) as CanonicalNodeRow | undefined;
+}
+
+function fetchEdgesBatch(
+  db: Database.Database,
+  frontierIds: string[]
+): Array<{ from_canonical_id: string; to_canonical_id: string; relation_type: "supersedes" | "contradicts" }> {
+  if (frontierIds.length === 0) return [];
+  const ph = frontierIds.map(() => "?").join(",");
+  return db.prepare(`
+    SELECT from_canonical_id, to_canonical_id, relation_type
+    FROM canonical_edges
+    WHERE from_canonical_id IN (${ph}) OR to_canonical_id IN (${ph})
+  `).all(...frontierIds, ...frontierIds) as Array<{
+    from_canonical_id: string;
+    to_canonical_id: string;
+    relation_type: "supersedes" | "contradicts";
+  }>;
+}
+
+function fetchEvidenceBatch(
+  db: Database.Database,
+  frontierIds: string[]
+): Array<{ canonical_id: string; memory_id: string }> {
+  if (frontierIds.length === 0) return [];
+  const ph = frontierIds.map(() => "?").join(",");
+  return db.prepare(`
+    SELECT canonical_id, memory_id
+    FROM canonical_evidence
+    WHERE canonical_id IN (${ph})
+  `).all(...frontierIds) as Array<{ canonical_id: string; memory_id: string }>;
+}
+
+function fetchCanonicalNodesBatch(
+  db: Database.Database,
+  ids: string[]
+): Map<string, CanonicalNodeRow> {
+  const out = new Map<string, CanonicalNodeRow>();
+  if (ids.length === 0) return out;
+  const ph = ids.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT id, kind, title, content, scope, importance, confidence, valid_from, valid_to
+    FROM canonical_memories
+    WHERE id IN (${ph})
+  `).all(...ids) as CanonicalNodeRow[];
+  for (const row of rows) out.set(row.id, row);
+  return out;
 }
 
 function getRawNode(db: Database.Database, id: string): RawNodeRow | undefined {

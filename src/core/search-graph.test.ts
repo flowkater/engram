@@ -9,6 +9,7 @@ import {
 } from "./canonical-candidates.js";
 import path from "node:path";
 import os from "node:os";
+import type Database from "better-sqlite3";
 
 vi.mock("../core/embedder.js", async () => {
   const { createMockEmbedder } = await import("../__test__/mock-embedder.js");
@@ -286,5 +287,80 @@ describe("runGraphSearch", () => {
     expect(result.graph.meta.seedCount).toBeGreaterThan(0);
     expect(result.graph.meta.expandedNodeCount).toBeGreaterThanOrEqual(0);
     expect(result.graph.meta.rerankVersion).toBe("v1");
+  });
+});
+
+describe("runGraphSearch — batched frontier queries", () => {
+  let inst: DatabaseInstance;
+
+  beforeEach(() => {
+    inst = openDatabase(tmpDbPath());
+  });
+
+  afterEach(() => {
+    inst.close();
+  });
+
+  it("batches per-hop edge + node fetches (no N+1 per frontier node)", async () => {
+    // Seed a star graph: node-0 is center, linked via `supersedes` to node-1..node-9.
+    // Raw + canonical via memoryAdd/memoryPromote so FTS/vec artifacts are populated.
+    const center = await memoryAdd(inst.db, {
+      content: "Star center keyword anchor note.",
+      scope: "batch-test",
+    });
+    const centerCanon = await memoryPromote(inst.db, {
+      memoryIds: [center.id],
+      kind: "fact",
+      title: "Star center",
+      content: "Star center keyword anchor note.",
+      scope: "batch-test",
+    });
+
+    const neighborCanonIds: string[] = [];
+    for (let i = 1; i < 10; i++) {
+      const raw = await memoryAdd(inst.db, {
+        content: `Neighbor node ${i} keyword content.`,
+        scope: "batch-test",
+      });
+      const canon = await memoryPromote(inst.db, {
+        memoryIds: [raw.id],
+        kind: "fact",
+        title: `Neighbor ${i}`,
+        content: `Neighbor node ${i} keyword content.`,
+        scope: "batch-test",
+        supersedes: [centerCanon.canonicalId],
+      });
+      neighborCanonIds.push(canon.canonicalId);
+    }
+
+    // Intercept db.prepare to count edge / per-id canonical_memories queries.
+    const origPrepare = (inst.db as Database.Database).prepare.bind(inst.db);
+    let edgeQueryCount = 0;
+    let perIdNodeQueryCount = 0;
+    (inst.db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      if (/\bcanonical_edges\b/i.test(sql)) edgeQueryCount++;
+      if (/FROM\s+canonical_memories[\s\S]*WHERE[\s\S]*\bid\s*=\s*\?/i.test(sql)) {
+        perIdNodeQueryCount++;
+      }
+      return origPrepare(sql);
+    };
+
+    try {
+      await runGraphSearch(inst.db, {
+        query: "keyword",
+        scope: "batch-test",
+        hopDepth: 1,
+        limit: 5,
+      });
+    } finally {
+      (inst.db as unknown as { prepare: (sql: string) => unknown }).prepare = origPrepare;
+    }
+
+    // After refactor: 1 batched edge fetch per hop + 1 batched supersede-check
+    // at the end. Allow a small constant ceiling (not proportional to neighbor count).
+    expect(edgeQueryCount).toBeLessThanOrEqual(4);
+    // Canonical node materialization is now batched via IN(...) — no per-id
+    // equality fetches should happen inside runGraphSearch's BFS loop.
+    expect(perIdNodeQueryCount).toBe(0);
   });
 });
