@@ -225,7 +225,7 @@ export function startCanonicalCandidateWorker(
     activeRun = (async () => {
       const currentNow = now();
       reclaimStaleProcessingCandidates(db, { limit: 10 }, currentNow);
-      const candidate = listQueuedCanonicalCandidates(db, 1)[0];
+      const candidate = listQueuedCanonicalCandidates(db, 1, currentNow)[0];
       if (candidate) {
         await processCandidate(candidate);
       }

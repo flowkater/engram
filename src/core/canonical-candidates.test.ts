@@ -817,3 +817,40 @@ describe("requeueCanonicalCandidateAfterTransientFailure with backoff + max retr
     expect(computeCanonicalCandidateBackoffMs(20)).toBeLessThanOrEqual(60 * 60 * 1000);
   });
 });
+
+describe("listQueuedCanonicalCandidates respects next_retry_at", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-list-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+  let inst: ReturnType<typeof openDatabase>;
+  beforeEach(() => { inst = openDatabase(tmpDbPath()); });
+  afterEach(() => { inst.close(); });
+
+  function seed(id: string, nextRetryAt: string | null): void {
+    inst.db.prepare(`
+      INSERT INTO memories (id, content, source, scope, created_at, updated_at, deleted)
+      VALUES (?, 'x', 'manual', 'global', '2026-04-24T00:00:00Z', '2026-04-24T00:00:00Z', 0)
+    `).run("raw-" + id);
+    inst.db.prepare(`
+      INSERT INTO canonical_candidates (
+        id, raw_memory_id, scope, status, candidate_kind, candidate_content, priority_score,
+        content_fingerprint, retry_count, created_at, updated_at, next_retry_at
+      ) VALUES (?, ?, 'global', 'queued', 'fact', 'c', 1, ?, 0, '2026-04-24T00:00:00Z', '2026-04-24T00:00:00Z', ?)
+    `).run(id, "raw-" + id, "fp-" + id, nextRetryAt);
+  }
+
+  it("excludes candidates whose next_retry_at is in the future (relative to 'now' param)", () => {
+    seed("future", "2026-04-24T00:10:00Z");
+    seed("past", "2026-04-24T00:00:05Z");
+    seed("null", null);
+    const results = listQueuedCanonicalCandidates(inst.db, 10, "2026-04-24T00:05:00Z");
+    const ids = results.map((r) => r.id).sort();
+    expect(ids).toEqual(["null", "past"]);
+  });
+
+  it("remains backward-compatible when 'now' omitted (returns all queued)", () => {
+    seed("future", "2099-01-01T00:00:00Z");
+    const results = listQueuedCanonicalCandidates(inst.db, 10);
+    expect(results.map((r) => r.id)).toContain("future");
+  });
+});

@@ -324,8 +324,14 @@ export function enqueueCanonicalCandidate(
 
 export function listQueuedCanonicalCandidates(
   db: Database.Database,
-  limit: number
+  limit: number,
+  now?: string
 ): CanonicalCandidateRow[] {
+  const hasNow = typeof now === "string" && now.length > 0;
+  const whereBackoff = hasNow
+    ? "AND (canonical_candidates.next_retry_at IS NULL OR canonical_candidates.next_retry_at <= ?)"
+    : "";
+  const params: unknown[] = hasNow ? [now, limit] : [limit];
   return db.prepare(`
     SELECT canonical_candidates.id, canonical_candidates.raw_memory_id, canonical_candidates.scope,
            canonical_candidates.status, canonical_candidates.candidate_kind,
@@ -339,9 +345,10 @@ export function listQueuedCanonicalCandidates(
     JOIN memories ON memories.id = canonical_candidates.raw_memory_id
     WHERE canonical_candidates.status = 'queued'
       AND memories.deleted = 0
+      ${whereBackoff}
     ORDER BY canonical_candidates.priority_score DESC, canonical_candidates.created_at DESC
     LIMIT ?
-  `).all(limit) as CanonicalCandidateRow[];
+  `).all(...params) as CanonicalCandidateRow[];
 }
 
 export function markCanonicalCandidateProcessing(
