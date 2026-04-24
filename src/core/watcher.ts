@@ -191,8 +191,12 @@ export function startWatcher(
 ): WatcherInstance {
   const source = opts.source || "obsidian";
   const debounceMs = opts.debounceMs ?? 2000;
+  const MIN_POLLING_INTERVAL_MS = 1000;
   const usePolling = opts.usePolling ?? process.env.CHOKIDAR_USEPOLLING === "true";
-  const pollingInterval = opts.pollingInterval ?? 100;
+  const pollingInterval = Math.max(
+    opts.pollingInterval ?? MIN_POLLING_INTERVAL_MS,
+    MIN_POLLING_INTERVAL_MS
+  );
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const vaultPath = path.resolve(opts.vaultPath);
 

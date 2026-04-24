@@ -481,3 +481,23 @@ describe("diffScan with checkpoints", () => {
     expect(cp).toBeUndefined();
   });
 });
+
+describe("startWatcher polling guard", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-watchpoll-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  it("clamps polling interval to at least 1000ms when usePolling is true", async () => {
+    const inst = openDatabase(tmpDbPath());
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-poll-"));
+    try {
+      const w = startWatcher(inst.db, { vaultPath: dir, usePolling: true, pollingInterval: 50 });
+      const opts = (w.watcher as unknown as { options: { interval?: number } }).options;
+      expect(opts.interval).toBeGreaterThanOrEqual(1000);
+      await w.close();
+    } finally {
+      inst.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
