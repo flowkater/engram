@@ -46,13 +46,20 @@ export async function diffScan(
 ): Promise<{ scanned: number; indexed: number }> {
   const source = opts?.source || "obsidian";
   const resolvedVault = path.resolve(vaultPath);
+  let walkHadErrors = false;
 
   async function walk(dir: string): Promise<string[]> {
     const out: string[] = [];
     let entries;
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      // Track the error and surface it — a transient readdir failure
+      // (Obsidian sync / Dropbox / OneDrive / permission race) would otherwise
+      // silently cause every file under this subdir to be treated as missing,
+      // triggering spurious soft-deletes in the deletion pass below.
+      walkHadErrors = true;
+      opts?.onError?.(err as Error);
       return out;
     }
     for (const entry of entries) {
@@ -83,7 +90,10 @@ export async function diffScan(
 
   let scanned = 0;
   let indexed = 0;
-  const BATCH = 8;
+  // Limit to 3 concurrent files in flight — matches the live watcher's Semaphore(3)
+  // and complements indexer.ts's pLimit(3) for embed calls within a single file.
+  // See the `indexSemaphore = new Semaphore(3)` below for the live-path equivalent.
+  const BATCH = 3;
 
   for (let i = 0; i < mdFiles.length; i += BATCH) {
     const batch = mdFiles.slice(i, i + BATCH);
@@ -115,22 +125,29 @@ export async function diffScan(
     await new Promise((r) => setImmediate(r));
   }
 
-  // Deletion pass
-  const allCheckpoints = db.prepare(
-    "SELECT source_path FROM file_checkpoints WHERE source = ?"
-  ).all(source) as Array<{ source_path: string }>;
+  // Deletion pass — only run if the walk fully succeeded. If any readdir
+  // failed, currentFiles is incomplete and treating missing entries as
+  // deletions would soft-delete real, still-present files. We keep the
+  // indexing work done above; a subsequent scan will reconcile deletions.
+  if (!walkHadErrors) {
+    const allCheckpoints = db.prepare(
+      "SELECT source_path FROM file_checkpoints WHERE source = ?"
+    ).all(source) as Array<{ source_path: string }>;
 
-  for (const cp of allCheckpoints) {
-    if (!currentFiles.has(cp.source_path)) {
-      try {
-        db.transaction(() => {
-          softDeleteByPath(db, cp.source_path);
-          deleteCheckpoint.run(cp.source_path);
-        })();
-      } catch (err) {
-        opts?.onError?.(err as Error);
+    for (const cp of allCheckpoints) {
+      if (!currentFiles.has(cp.source_path)) {
+        try {
+          db.transaction(() => {
+            softDeleteByPath(db, cp.source_path);
+            deleteCheckpoint.run(cp.source_path);
+          })();
+        } catch (err) {
+          opts?.onError?.(err as Error);
+        }
       }
     }
+  } else {
+    opts?.onError?.(new Error("diffScan: walk encountered errors, skipping deletion pass to avoid spurious soft-deletes"));
   }
 
   return { scanned, indexed };
