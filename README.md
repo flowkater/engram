@@ -15,6 +15,20 @@ Local AI agent memory server using MCP (Model Context Protocol). Provides semant
 - **Integrity**: Health checks, transactional writes, soft-delete with sync cleanup
 - **Comprehensive Tests**: Unit + E2E coverage for MCP tools, canonical pipeline, and server bootstrap
 
+## Performance
+
+As of 2026-04-24 ([performance overhaul plan](docs/superpowers/plans/2026-04-24-performance-overhaul.md)):
+
+- **Idle CPU**: < 5% (previously ~100% due to a canonical-candidate-worker hot loop)
+- **Startup latency**: MCP handshake returns in < 100ms regardless of vault size (diffScan detached from bootstrap)
+- **SIGTERM**: process exits within 2s even during a vault scan
+- **memory.search**: ≤ 8 prepared statements per call (was ~12 from the multiplier loop)
+- **memory.graph** / **memory.search_graph**: batched BFS queries — O(hops) instead of O(frontier × hops)
+- **memory.health** / **memory.stats**: consolidated queries + 30s TTL cache
+- **Codex compatibility**: tool responses capped at 64KB for strict-client parsers
+
+Opt-in guardrail: set `ENGRAM_CPU_WATCHDOG_MS=1000` to log event loop lag warnings when turnaround exceeds the threshold.
+
 ## Quick Start (로컬 테스트)
 
 ```bash~
