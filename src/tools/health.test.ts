@@ -112,3 +112,23 @@ describe("memory.health", () => {
     expect(result.healthy).toBe(false);
   });
 });
+
+describe("memoryHealth — query efficiency", () => {
+  it("uses <= 5 prepared statements per call (was ~9 subquery scans)", () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `engram-health-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
+    );
+    const inst = openDatabase(dbPath);
+    try {
+      const origPrepare = inst.db.prepare.bind(inst.db);
+      let prepareCount = 0;
+      (inst.db as any).prepare = (sql: string) => { prepareCount++; return origPrepare(sql); };
+      memoryHealth(inst.db);
+      expect(prepareCount).toBeLessThanOrEqual(5);
+    } finally {
+      inst.close();
+      try { fs.unlinkSync(dbPath); } catch {}
+    }
+  });
+});
