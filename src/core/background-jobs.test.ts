@@ -82,3 +82,34 @@ describe("background jobs", () => {
     expect(starts).toContain("candidate-worker-stop");
   });
 });
+
+describe("startBackgroundJobs does not block on diffScan", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-bgjobs-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  it("returns quickly even when diffScan is slow", async () => {
+    const inst = openDatabase(tmpDbPath());
+    try {
+      let diffScanFinished = false;
+      const slowDiffScan = async () => {
+        await new Promise((r) => setTimeout(r, 1500));
+        diffScanFinished = true;
+      };
+      const started = Date.now();
+      const cleanup = await startBackgroundJobs({
+        db: inst.db,
+        vaultPath: "/tmp/nonexistent-should-not-matter",
+        backgroundConfig: { diffScanEnabled: true, watcherEnabled: false, schedulerEnabled: false, backgroundEnabled: false },
+        log: () => {},
+        runDiffScan: slowDiffScan,
+      });
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeLessThan(500); // must not await 1500ms
+      expect(diffScanFinished).toBe(false);
+      await cleanup();
+    } finally {
+      inst.close();
+    }
+  });
+});

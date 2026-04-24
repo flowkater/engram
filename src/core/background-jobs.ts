@@ -36,15 +36,18 @@ export async function startBackgroundJobs(args: BackgroundJobsArgs): Promise<() 
     args.log(`Vault not found at ${args.vaultPath}, skipping watcher`);
   } else {
     if (args.backgroundConfig.diffScanEnabled) {
-      if (args.runDiffScan) {
-        await args.runDiffScan();
-      } else {
-        const diffResult = await diffScan(args.db, args.vaultPath, {
-          onIndexed: (file, chunks) => args.log(`[diffScan] Indexed ${file} (${chunks} chunks)`),
-          onError: (err) => args.log(`[diffScan] Error: ${err.message}`),
-        });
-        args.log(`Diff scan complete: ${diffResult.scanned} scanned, ${diffResult.indexed} indexed`);
-      }
+      // Run diffScan detached so bootstrap returns immediately.
+      // Large vaults can take tens of seconds — blocking the handshake pins CPU and delays SIGTERM.
+      const runner = args.runDiffScan
+        ? args.runDiffScan
+        : async () => {
+            const diffResult = await diffScan(args.db, args.vaultPath, {
+              onIndexed: (file, chunks) => args.log(`[diffScan] Indexed ${file} (${chunks} chunks)`),
+              onError: (err) => args.log(`[diffScan] Error: ${err.message}`),
+            });
+            args.log(`Diff scan complete: ${diffResult.scanned} scanned, ${diffResult.indexed} indexed`);
+          };
+      void runner().catch((err) => args.log(`[diffScan] Fatal: ${(err as Error).message}`));
     }
 
     if (args.backgroundConfig.watcherEnabled) {
