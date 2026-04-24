@@ -77,12 +77,21 @@ export function getCurrentModelName(opts?: EmbedderOptions): string {
   return `ollama/${getOllamaEmbeddingModelName(opts?.ollamaModel)}`;
 }
 
+const MAX_EMBED_RETRIES = 2; // 3 total attempts
+
+/**
+ * Compute exponential backoff delay in ms for a given retry attempt index.
+ * attempt 0 → 1000ms, 1 → 2000ms, 2 → 4000ms.
+ */
+export function computeEmbedBackoffMs(attempt: number): number {
+  return 1000 * Math.pow(2, attempt);
+}
+
 async function embedOllama(text: string, baseUrl: string, model: string): Promise<Float32Array> {
   const TIMEOUT_MS = 30_000;
-  const MAX_RETRIES = 1;
-
   let lastError: Error | undefined;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+
+  for (let attempt = 0; attempt <= MAX_EMBED_RETRIES; attempt++) {
     try {
       return await requestOllamaEmbeddings(text, {
         baseUrl,
@@ -91,9 +100,12 @@ async function embedOllama(text: string, baseUrl: string, model: string): Promis
       });
     } catch (err) {
       lastError = err as Error;
-      if (attempt < MAX_RETRIES) {
-        console.warn(`[embedder] Ollama attempt ${attempt + 1} failed: ${lastError.message}, retrying in 1s...`);
-        await new Promise((r) => setTimeout(r, 1000));
+      if (attempt < MAX_EMBED_RETRIES) {
+        const delay = computeEmbedBackoffMs(attempt); // 1s, 2s, 4s
+        console.warn(
+          `[embedder] Ollama attempt ${attempt + 1} failed: ${lastError.message}, retrying in ${delay}ms...`
+        );
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   }

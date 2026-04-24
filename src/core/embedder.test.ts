@@ -95,3 +95,53 @@ describe("ENGRAM_STRICT_LOCAL", () => {
     expect(Array.from(first.embedding)).not.toEqual(Array.from(third.embedding));
   });
 });
+
+describe("embedOllama exponential backoff", () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    delete process.env.ENGRAM_STRICT_LOCAL;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.ENGRAM_MOCK_EMBEDDINGS;
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("computeEmbedBackoffMs returns 1s/2s/4s for attempts 0/1/2", async () => {
+    const { computeEmbedBackoffMs } = await import("./embedder.js");
+    expect(computeEmbedBackoffMs(0)).toBe(1000);
+    expect(computeEmbedBackoffMs(1)).toBe(2000);
+    expect(computeEmbedBackoffMs(2)).toBe(4000);
+  });
+
+  it("retries up to 3 total attempts before throwing", async () => {
+    // STRICT_LOCAL default = true → no OpenAI fallback, so Ollama errors bubble up.
+    let attempts = 0;
+    const mockFetch = vi.fn().mockImplementation(() => {
+      attempts++;
+      return Promise.reject(new Error("simulated network error"));
+    });
+    vi.stubGlobal("fetch", mockFetch);
+
+    // Patch setTimeout to fire synchronously so we don't actually wait 1s+2s.
+    const realSetTimeout = globalThis.setTimeout;
+    const fastSetTimeout = ((fn: () => void) => realSetTimeout(fn, 0)) as typeof setTimeout;
+    vi.stubGlobal("setTimeout", fastSetTimeout);
+
+    const { embed } = await import("./embedder.js");
+
+    await expect(embed("test text")).rejects.toThrow();
+
+    // Only count calls to the ollama endpoint (exclude any other fetches).
+    const ollamaCalls = mockFetch.mock.calls.filter((c: any) =>
+      String(c[0]).includes("/api/embeddings")
+    );
+    expect(ollamaCalls.length).toBe(3);
+    expect(attempts).toBe(3);
+  });
+});
