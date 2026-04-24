@@ -258,3 +258,23 @@ describe("database", () => {
     expect(recreated).toBeTruthy();
   });
 });
+
+describe("database pragmas for multi-process safety", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-pragma-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  it("applies hardened pragmas on open", () => {
+    const inst = openDatabase(tmpDbPath());
+    try {
+      expect(inst.db.pragma("journal_mode", { simple: true })).toBe("wal");
+      expect(Number(inst.db.pragma("busy_timeout", { simple: true }))).toBeGreaterThanOrEqual(30000);
+      expect(String(inst.db.pragma("synchronous", { simple: true }))).toMatch(/^(1|normal)$/i);
+      expect(Number(inst.db.pragma("mmap_size", { simple: true }))).toBeGreaterThanOrEqual(64 * 1024 * 1024);
+      expect(Number(inst.db.pragma("cache_size", { simple: true }))).toBeLessThanOrEqual(-16000);
+      expect(Number(inst.db.pragma("wal_autocheckpoint", { simple: true }))).toBeGreaterThan(0);
+    } finally {
+      inst.close();
+    }
+  });
+});

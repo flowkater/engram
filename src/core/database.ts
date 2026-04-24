@@ -327,9 +327,15 @@ export function openDatabase(
     try {
       db = new Database(dbPath);
 
-      // WAL mode for concurrent reads
+      // WAL + pragmas hardened for multi-process MCP clients.
+      // See docs/superpowers/plans/2026-04-24-performance-overhaul.md Task 1.1.
       db.pragma("journal_mode = WAL");
-      db.pragma("busy_timeout = 5000");
+      db.pragma("busy_timeout = 30000");             // 30s — tolerate long index transactions
+      db.pragma("synchronous = NORMAL");             // safe with WAL, ~2x write throughput vs FULL
+      db.pragma("cache_size = -65536");              // 64 MiB page cache per connection
+      db.pragma("mmap_size = 268435456");            // 256 MiB mmap — reduce random-read I/O
+      db.pragma("wal_autocheckpoint = 1000");        // checkpoint every 1000 pages
+      db.pragma("temp_store = MEMORY");
       db.pragma("foreign_keys = ON");
 
       // Load sqlite-vec extension
