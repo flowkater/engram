@@ -207,3 +207,64 @@ describe("buildSummaryText", () => {
     expect(text).not.toContain("Saved:");
   });
 });
+
+describe("SessionTracker — interval gated on active sessions", () => {
+  let inst: DatabaseInstance;
+  let tracker: SessionTracker;
+
+  beforeEach(() => {
+    inst = openDatabase(tmpDbPath());
+  });
+
+  afterEach(() => {
+    tracker?.stop();
+    inst.close();
+  });
+
+  it("does not hold a timer when no sessions are active", () => {
+    tracker = new SessionTracker(inst.db, { log: () => {} });
+    tracker.start();
+    // With no active sessions, no interval should be running
+    const handle = (tracker as unknown as { intervalHandle?: unknown }).intervalHandle;
+    expect(handle == null).toBe(true);
+  });
+
+  it("starts interval when a session is tracked, stops when flushed", async () => {
+    tracker = new SessionTracker(inst.db, { log: () => {} });
+    tracker.start();
+
+    // Before any activity: no interval
+    expect(
+      (tracker as unknown as { intervalHandle?: unknown }).intervalHandle == null
+    ).toBe(true);
+
+    // Record a session — this should spin up the interval
+    tracker.recordActivity("memory.search", { query: "test" });
+
+    expect(
+      (tracker as unknown as { intervalHandle?: unknown }).intervalHandle != null
+    ).toBe(true);
+
+    // Once flushed, the interval should be cleared
+    await tracker.flush();
+
+    expect(
+      (tracker as unknown as { intervalHandle?: unknown }).intervalHandle == null
+    ).toBe(true);
+  });
+
+  it("does not start an interval if recordActivity fires before start()", () => {
+    tracker = new SessionTracker(inst.db, { log: () => {} });
+    // Record before start — should not create an interval until start() is called
+    tracker.recordActivity("memory.search", { query: "early" });
+    expect(
+      (tracker as unknown as { intervalHandle?: unknown }).intervalHandle == null
+    ).toBe(true);
+
+    // Now start — interval should spin up since a session already exists
+    tracker.start();
+    expect(
+      (tracker as unknown as { intervalHandle?: unknown }).intervalHandle != null
+    ).toBe(true);
+  });
+});

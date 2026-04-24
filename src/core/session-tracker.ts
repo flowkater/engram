@@ -41,6 +41,7 @@ export class SessionTracker {
   private checkIntervalMs: number;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private flushed = false;
+  private started = false;
   private log: (message: string) => void;
 
   constructor(db: Database.Database, opts?: SessionTrackerOptions) {
@@ -50,13 +51,14 @@ export class SessionTracker {
     this.log = opts?.log ?? (() => {});
   }
 
-  /** Start idle-check interval and register stdin close handler. */
+  /** Start idle-check gating and register stdin close handler. The
+   *  idle-check interval is lazily created only while a session is active,
+   *  so an idle daemon with no sessions holds no timers. */
   start(): void {
-    // Method A: Idle timeout check
-    this.intervalHandle = setInterval(() => {
-      this.checkIdle();
-    }, this.checkIntervalMs);
-    this.intervalHandle.unref();
+    this.started = true;
+
+    // Method A: Idle timeout check — only runs while a session is active
+    this.ensureIntervalMatchesSessionState();
 
     // Method B: stdin close (primary for stdio transport)
     process.stdin.on("end", () => {
@@ -65,6 +67,22 @@ export class SessionTracker {
     process.stdin.on("close", () => {
       void this.flush();
     });
+  }
+
+  /** Create or tear down the idle-check interval based on whether there is
+   *  an active (non-flushed) session. Safe to call repeatedly. */
+  private ensureIntervalMatchesSessionState(): void {
+    if (!this.started) return;
+    const active = this.session !== null && !this.flushed;
+    if (active && !this.intervalHandle) {
+      this.intervalHandle = setInterval(() => {
+        this.checkIdle();
+      }, this.checkIntervalMs);
+      this.intervalHandle.unref();
+    } else if (!active && this.intervalHandle) {
+      clearInterval(this.intervalHandle);
+      this.intervalHandle = null;
+    }
   }
 
   /** Record a tool invocation. Creates session on first call. */
@@ -80,6 +98,9 @@ export class SessionTracker {
         activities: [],
         scopeCounts: {},
       };
+      // Spin up idle-check interval now that we have an active session.
+      // No-op if start() has not been called yet.
+      this.ensureIntervalMatchesSessionState();
     }
 
     this.session.lastActivityAt = now;
