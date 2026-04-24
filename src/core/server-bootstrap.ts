@@ -8,7 +8,7 @@ import { resolveBackgroundTiming, startBackgroundWorker, type BackgroundWorkerIn
 import { startBackgroundJobs } from "./background-jobs.js";
 import { resolveBackgroundRuntime } from "./background-runtime.js";
 import { createEngramServer, type SessionTrackerLike } from "./server-app.js";
-import { startEventLoopWatchdog } from "./self-watchdog.js";
+import { startEventLoopWatchdog, type WatchdogInstance } from "./self-watchdog.js";
 
 export interface ServerLike {
   connect(transport: unknown): Promise<void>;
@@ -153,8 +153,9 @@ export async function startServerBootstrap(
   }
 
   const watchdogThreshold = parseInt(env.ENGRAM_CPU_WATCHDOG_MS || "0", 10);
+  let watchdog: WatchdogInstance | null = null;
   if (watchdogThreshold > 0) {
-    startEventLoopWatchdog({
+    watchdog = startEventLoopWatchdog({
       thresholdMs: watchdogThreshold,
       onLag: (lag) => log(`[watchdog] Event loop lag ${lag}ms (threshold ${watchdogThreshold}ms)`),
     });
@@ -185,6 +186,11 @@ export async function startServerBootstrap(
       dbInstance.close();
     } catch (err) {
       log(`db.close error: ${(err as Error).message}`);
+    }
+    try {
+      watchdog?.stop();
+    } catch (err) {
+      log(`watchdog.stop error: ${(err as Error).message}`);
     }
   }
 

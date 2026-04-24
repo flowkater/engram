@@ -24,14 +24,19 @@ export function startEventLoopWatchdog(opts: WatchdogOptions): WatchdogInstance 
   function tick(): void {
     if (stopped) return;
     const t0 = Date.now();
-    setImmediate(() => {
+    const immediate = setImmediate(() => {
       if (stopped) return;
       const lag = Date.now() - t0;
       if (lag > opts.thresholdMs) {
-        opts.onLag(lag);
+        try {
+          opts.onLag(lag);
+        } catch {
+          /* swallow — don't kill the loop */
+        }
       }
       setTimeout(tick, 250).unref?.();
     });
+    immediate.unref?.();
   }
 
   tick();
