@@ -363,4 +363,193 @@ describe("runGraphSearch — batched frontier queries", () => {
     // equality fetches should happen inside runGraphSearch's BFS loop.
     expect(perIdNodeQueryCount).toBe(0);
   });
+
+  it("batches edge queries across multi-hop expansion (hopDepth=2)", async () => {
+    // 3-layer graph:
+    //   center ── supersedes ── first-ring-1, first-ring-2, first-ring-3
+    //   each first-ring ── supersedes ── 2 second-ring neighbors (unique)
+    const center = await memoryAdd(inst.db, {
+      content: "Layer graph center keyword anchor.",
+      scope: "multi-hop",
+    });
+    const centerCanon = await memoryPromote(inst.db, {
+      memoryIds: [center.id],
+      kind: "fact",
+      title: "Layer center",
+      content: "Layer graph center keyword anchor.",
+      scope: "multi-hop",
+    });
+
+    const firstRing: string[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const raw = await memoryAdd(inst.db, {
+        content: `First ring node ${i} keyword content.`,
+        scope: "multi-hop",
+      });
+      const canon = await memoryPromote(inst.db, {
+        memoryIds: [raw.id],
+        kind: "fact",
+        title: `First ring ${i}`,
+        content: `First ring node ${i} keyword content.`,
+        scope: "multi-hop",
+        supersedes: [centerCanon.canonicalId],
+      });
+      firstRing.push(canon.canonicalId);
+    }
+
+    for (let i = 0; i < firstRing.length; i++) {
+      for (let j = 1; j <= 2; j++) {
+        const raw = await memoryAdd(inst.db, {
+          content: `Second ring ${i}-${j} keyword content.`,
+          scope: "multi-hop",
+        });
+        await memoryPromote(inst.db, {
+          memoryIds: [raw.id],
+          kind: "fact",
+          title: `Second ring ${i}-${j}`,
+          content: `Second ring ${i}-${j} keyword content.`,
+          scope: "multi-hop",
+          supersedes: [firstRing[i]],
+        });
+      }
+    }
+
+    const origPrepare = (inst.db as Database.Database).prepare.bind(inst.db);
+    let edgeQueryCount = 0;
+    let perIdNodeQueryCount = 0;
+    (inst.db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      if (/\bcanonical_edges\b/i.test(sql)) edgeQueryCount++;
+      if (/FROM\s+canonical_memories[\s\S]*WHERE[\s\S]*\bid\s*=\s*\?/i.test(sql)) {
+        perIdNodeQueryCount++;
+      }
+      return origPrepare(sql);
+    };
+
+    try {
+      await runGraphSearch(inst.db, {
+        query: "keyword",
+        scope: "multi-hop",
+        hopDepth: 2,
+        limit: 5,
+      });
+    } finally {
+      (inst.db as unknown as { prepare: (sql: string) => unknown }).prepare = origPrepare;
+    }
+
+    // hopDepth=2: expect 1 batched edge fetch per hop (2) + 1 batched
+    // supersede-check at the end = 3. Allow up to 3 (not proportional to node count).
+    expect(edgeQueryCount).toBeLessThanOrEqual(3);
+    expect(perIdNodeQueryCount).toBe(0);
+  });
+});
+
+describe("runGraphSearch — bidirectional edge propagation", () => {
+  it("boosts the low-relevance seed's score when both seeds share an edge (regression for b1ce93e)", async () => {
+    // Regression for the BFS fix: when two seeds share an edge and BOTH are
+    // in the initial frontier, the pre-fix "pick otherId only" loop added
+    // only one endpoint to nodeCache. The endpoint loop's second iteration
+    // then looked up the other endpoint and got undefined — silently skipping
+    // one direction of score propagation.
+    //
+    // Setup mirrors the reviewer's scenario: `weak` is promoted with
+    // contradicts:[strong], so the DB edge is (from=weak, to=strong). With
+    // the pre-fix loop: frontier.has(from=weak) is true → otherId=strong →
+    // only strong lands in nodeCache. In the endpoint loop, the second pass
+    // (canonicalId=strong, otherId=weak) calls nodeCache.get(weak) which is
+    // undefined and hits `continue`, skipping the strong→weak propagation.
+    //
+    // We prove the regression with a twin-DB comparison: identical rows
+    // with and without the edge. Pre-fix, weak's final score is identical
+    // in both DBs (propagation silently dropped). Post-fix, the with-edge
+    // weak score is strictly higher because it now picks up
+    // strong.seedScore * EDGE_PROPAGATION_DECAY via the now-working second
+    // endpoint iteration.
+
+    const withEdgeInst = openDatabase(tmpDbPath());
+    const noEdgeInst = openDatabase(tmpDbPath());
+
+    try {
+      const query = "authentication rotation policy keyword";
+      const scope = "bidir-prop";
+
+      const strongContent = "Authentication rotation policy keyword: JWT access tokens.";
+      const weakContent = "Cookie sessions note keyword legacy.";
+      const strongTitle = "Authentication rotation policy keyword";
+      const weakTitle = "Cookie sessions keyword";
+
+      // With-edge DB.
+      const wStrongRaw = await memoryAdd(withEdgeInst.db, { content: strongContent, scope });
+      const wWeakRaw = await memoryAdd(withEdgeInst.db, { content: weakContent, scope });
+      const wStrong = await memoryPromote(withEdgeInst.db, {
+        memoryIds: [wStrongRaw.id],
+        kind: "fact",
+        title: strongTitle,
+        content: strongContent,
+        scope,
+      });
+      const wWeak = await memoryPromote(withEdgeInst.db, {
+        memoryIds: [wWeakRaw.id],
+        kind: "fact",
+        title: weakTitle,
+        content: weakContent,
+        scope,
+        contradicts: [wStrong.canonicalId], // edge stored as (from=wWeak, to=wStrong)
+      });
+
+      // No-edge DB — identical content, no contradicts link.
+      const nStrongRaw = await memoryAdd(noEdgeInst.db, { content: strongContent, scope });
+      const nWeakRaw = await memoryAdd(noEdgeInst.db, { content: weakContent, scope });
+      await memoryPromote(noEdgeInst.db, {
+        memoryIds: [nStrongRaw.id],
+        kind: "fact",
+        title: strongTitle,
+        content: strongContent,
+        scope,
+      });
+      const nWeak = await memoryPromote(noEdgeInst.db, {
+        memoryIds: [nWeakRaw.id],
+        kind: "fact",
+        title: weakTitle,
+        content: weakContent,
+        scope,
+      });
+
+      const withEdgeResult = await runGraphSearch(withEdgeInst.db, {
+        query,
+        scope,
+        limit: 5,
+        hopDepth: 1,
+      });
+      const noEdgeResult = await runGraphSearch(noEdgeInst.db, {
+        query,
+        scope,
+        limit: 5,
+        hopDepth: 1,
+      });
+
+      const wWeakRow = withEdgeResult.confirmed.find((row) => row.id === wWeak.canonicalId);
+      const nWeakRow = noEdgeResult.confirmed.find((row) => row.id === nWeak.canonicalId);
+      expect(wWeakRow).toBeDefined();
+      expect(nWeakRow).toBeDefined();
+
+      // Core regression assertion: the edge must BOOST weak's final score.
+      // Pre-fix: the strong→weak propagation is silently skipped so weak's
+      // score is unchanged by the edge's presence. Post-fix: weak picks up
+      // strong.seedScore * 0.85 via propagation → a measurable uplift.
+      expect(wWeakRow!.score).toBeGreaterThan(nWeakRow!.score);
+
+      // Sanity: the contradicts edge is emitted at least once.
+      expect(
+        withEdgeResult.graph.edges.some(
+          (edge) =>
+            edge.type === "contradicts" &&
+            ((edge.source === wStrong.canonicalId && edge.target === wWeak.canonicalId) ||
+              (edge.source === wWeak.canonicalId && edge.target === wStrong.canonicalId)),
+        ),
+      ).toBe(true);
+    } finally {
+      withEdgeInst.close();
+      noEdgeInst.close();
+    }
+  });
 });

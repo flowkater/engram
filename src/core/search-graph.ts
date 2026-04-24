@@ -137,16 +137,19 @@ export async function runGraphSearch(
     const evidenceRows = fetchEvidenceBatch(db, frontierIds);
 
     // Collect neighbor ids that aren't already materialized in the cache.
+    // Both endpoints of every edge must be fetched — when both endpoints are in
+    // the current frontier (e.g., two seeds linked by an edge), we still need
+    // each to appear in nodeCache so bidirectional score propagation below can
+    // resolve the neighbor node for each direction.
     const neighborIdsToFetch: string[] = [];
     const seenNeighbors = new Set<string>();
     for (const row of edgeRows) {
-      const otherId = frontier.has(row.from_canonical_id)
-        ? row.to_canonical_id
-        : row.from_canonical_id;
-      if (seenNeighbors.has(otherId)) continue;
-      seenNeighbors.add(otherId);
-      if (!nodeCache.has(otherId)) {
-        neighborIdsToFetch.push(otherId);
+      for (const id of [row.from_canonical_id, row.to_canonical_id]) {
+        if (seenNeighbors.has(id)) continue;
+        seenNeighbors.add(id);
+        if (!nodeCache.has(id)) {
+          neighborIdsToFetch.push(id);
+        }
       }
     }
 
@@ -405,14 +408,6 @@ function listCandidateRows(
 
   const filtered = rows.filter((row) => candidateMatchesQuery(row, params.query));
   return filtered.slice(0, requestedLimit);
-}
-
-function getCanonicalNode(db: Database.Database, id: string): CanonicalNodeRow | undefined {
-  return db.prepare(`
-    SELECT id, kind, title, content, scope, importance, confidence, valid_from, valid_to
-    FROM canonical_memories
-    WHERE id = ?
-  `).get(id) as CanonicalNodeRow | undefined;
 }
 
 function fetchEdgesBatch(
