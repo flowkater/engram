@@ -6,6 +6,16 @@ export type CanonicalCandidateStatus = "queued" | "processing" | "approved" | "m
 export type CanonicalCandidateKind = "fact" | "decision" | "unknown";
 export const CANONICAL_CANDIDATE_LEASE_MS = 30_000;
 
+export const MAX_CANONICAL_CANDIDATE_RETRIES = 5;
+const CANONICAL_CANDIDATE_BASE_BACKOFF_MS = 30_000;    // 30s
+const CANONICAL_CANDIDATE_MAX_BACKOFF_MS = 60 * 60_000; // 1h
+
+export function computeCanonicalCandidateBackoffMs(retryCount: number): number {
+  // Exponential: 30s * 2^(retry-1), capped at 1h. retry=1 → 30s, retry=2 → 60s, retry=5 → 8m, retry=10 → 1h.
+  const exp = CANONICAL_CANDIDATE_BASE_BACKOFF_MS * Math.pow(2, Math.max(0, retryCount - 1));
+  return Math.min(exp, CANONICAL_CANDIDATE_MAX_BACKOFF_MS);
+}
+
 export interface CanonicalCandidateRow {
   id: string;
   raw_memory_id: string;
@@ -435,18 +445,51 @@ export function requeueCanonicalCandidateAfterTransientFailure(
   input: RequeueCanonicalCandidateAfterTransientFailureInput,
   now: string
 ): void {
+  const row = db.prepare(
+    "SELECT retry_count FROM canonical_candidates WHERE id = ?"
+  ).get(input.id) as { retry_count: number } | undefined;
+
+  const currentRetries = row?.retry_count ?? 0;
+  const nextRetries = currentRetries + 1;
+
+  if (nextRetries > MAX_CANONICAL_CANDIDATE_RETRIES) {
+    db.prepare(`
+      UPDATE canonical_candidates
+      SET status = 'rejected',
+          retry_count = ?,
+          rationale = ?,
+          last_judged_at = ?,
+          updated_at = ?,
+          next_retry_at = NULL
+      WHERE id = ?
+    `).run(
+      nextRetries,
+      `Max retries exceeded (${MAX_CANONICAL_CANDIDATE_RETRIES}): ${input.rationale}`,
+      now,
+      now,
+      input.id
+    );
+    return;
+  }
+
+  const backoffMs = computeCanonicalCandidateBackoffMs(nextRetries);
+  const nextRetryAt = new Date(Date.parse(now) + backoffMs).toISOString();
+
   db.prepare(`
     UPDATE canonical_candidates
     SET status = 'queued',
-        retry_count = retry_count + 1,
+        retry_count = ?,
         rationale = ?,
         last_judged_at = ?,
-        updated_at = ?
+        updated_at = ?,
+        next_retry_at = ?
     WHERE id = ?
   `).run(
+    nextRetries,
     input.rationale,
     now,
     now,
+    nextRetryAt,
     input.id
   );
 }

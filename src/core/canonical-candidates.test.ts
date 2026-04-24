@@ -4,7 +4,9 @@ import os from "node:os";
 import { openDatabase } from "./database.js";
 import {
   CANONICAL_CANDIDATE_LEASE_MS,
+  MAX_CANONICAL_CANDIDATE_RETRIES,
   buildCandidateFingerprint,
+  computeCanonicalCandidateBackoffMs,
   deriveCandidateContent,
   deriveCandidateTitle,
   enqueueCanonicalCandidate,
@@ -762,5 +764,56 @@ describe("canonical candidate helpers", () => {
         updated_at: "2026-03-15T01:20:00.000Z",
       }),
     ]);
+  });
+});
+
+describe("requeueCanonicalCandidateAfterTransientFailure with backoff + max retries", () => {
+  function tmpBackoffDbPath(): string {
+    return path.join(os.tmpdir(), `engram-requeue-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+  let inst: ReturnType<typeof openDatabase>;
+  beforeEach(() => { inst = openDatabase(tmpBackoffDbPath()); });
+  afterEach(() => { inst.close(); });
+
+  function seedCandidate(retryCount: number, id = "cand-1"): void {
+    inst.db.prepare(`
+      INSERT INTO memories (id, content, source, scope, created_at, updated_at, deleted)
+      VALUES (?, ?, 'manual', 'global', '2026-04-24T00:00:00Z', '2026-04-24T00:00:00Z', 0)
+    `).run("raw-" + id, "content " + id);
+    inst.db.prepare(`
+      INSERT INTO canonical_candidates (
+        id, raw_memory_id, scope, status, candidate_kind, candidate_content, priority_score,
+        content_fingerprint, retry_count, created_at, updated_at
+      ) VALUES (?, ?, 'global', 'processing', 'fact', ?, 0, ?, ?, '2026-04-24T00:00:00Z', '2026-04-24T00:00:00Z')
+    `).run(id, "raw-" + id, "c", "fp-" + id, retryCount);
+  }
+
+  it("sets next_retry_at using exponential backoff", () => {
+    seedCandidate(0, "cand-a");
+    const now = "2026-04-24T00:00:00.000Z";
+    requeueCanonicalCandidateAfterTransientFailure(inst.db, { id: "cand-a", rationale: "timeout" }, now);
+    const row = inst.db.prepare("SELECT status, retry_count, next_retry_at FROM canonical_candidates WHERE id = ?").get("cand-a") as any;
+    expect(row.status).toBe("queued");
+    expect(row.retry_count).toBe(1);
+    const expectedDelay = computeCanonicalCandidateBackoffMs(1);
+    const delta = Date.parse(row.next_retry_at) - Date.parse(now);
+    expect(delta).toBeGreaterThanOrEqual(expectedDelay - 100);
+    expect(delta).toBeLessThanOrEqual(expectedDelay + 100);
+  });
+
+  it("caps retry_count and moves to rejected after MAX_CANONICAL_CANDIDATE_RETRIES", () => {
+    seedCandidate(MAX_CANONICAL_CANDIDATE_RETRIES, "cand-b");
+    const now = "2026-04-24T00:05:00.000Z";
+    requeueCanonicalCandidateAfterTransientFailure(inst.db, { id: "cand-b", rationale: "giving up" }, now);
+    const row = inst.db.prepare("SELECT status, retry_count, rationale FROM canonical_candidates WHERE id = ?").get("cand-b") as any;
+    expect(row.status).toBe("rejected");
+    expect(row.retry_count).toBe(MAX_CANONICAL_CANDIDATE_RETRIES + 1);
+    expect(row.rationale).toMatch(/giving up/);
+  });
+
+  it("exposes monotonic increasing backoff capped at ceiling", () => {
+    expect(computeCanonicalCandidateBackoffMs(1)).toBeLessThan(computeCanonicalCandidateBackoffMs(2));
+    expect(computeCanonicalCandidateBackoffMs(2)).toBeLessThan(computeCanonicalCandidateBackoffMs(3));
+    expect(computeCanonicalCandidateBackoffMs(20)).toBeLessThanOrEqual(60 * 60 * 1000);
   });
 });
