@@ -14,6 +14,15 @@ import { memoryHealth } from "../tools/health.js";
 import { memoryRestore } from "../tools/restore.js";
 import { memoryPromote } from "../tools/promote.js";
 import { appendSearchQueryLog, resolveSearchQueryLogPath } from "./query-log.js";
+import { limitResponseText } from "../utils/response-limit.js";
+
+/**
+ * Build an MCP text response, capped at 64KB for strict-client (Codex) compat.
+ * Keeps tool handlers free of boilerplate and guarantees no handler bypasses the cap.
+ */
+function textResponse(text: string) {
+  return { content: [{ type: "text" as const, text: limitResponseText(text) }] };
+}
 
 export interface SessionTrackerLike {
   recordActivity(toolName: string, payload: Record<string, unknown>): void;
@@ -29,7 +38,7 @@ export interface CreateEngramServerArgs {
 function errorResponse(log: (message: string) => void, toolName: string, err: unknown) {
   const message = (err as Error).message;
   log(`${toolName} error: ${message}`);
-  return { content: [{ type: "text" as const, text: `Error: ${message}` }], isError: true };
+  return { content: [{ type: "text" as const, text: limitResponseText(`Error: ${message}`) }], isError: true };
 }
 
 function safeAppendSearchQueryLog(
@@ -69,7 +78,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.add", { content, scope, tags, importance, summary });
         const result = await memoryAdd(args.db, { content, scope, tags, importance, summary });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.add", err);
       }
@@ -99,7 +108,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
           asOf,
           timestamp: new Date().toISOString(),
         });
-        return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+        return textResponse(JSON.stringify(results, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.search", err);
       }
@@ -127,7 +136,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
           asOf,
           timestamp: new Date().toISOString(),
         });
-        return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+        return textResponse(JSON.stringify(results, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.search_graph", err);
       }
@@ -146,7 +155,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.context", { cwd, limit, recent });
         const result = memoryContext(args.db, { cwd, limit, recent });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.context", err);
       }
@@ -167,7 +176,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.summary", { summary, sessionId, scope, tags, agent });
         const result = await memorySummary(args.db, { summary, sessionId, scope, tags, agent });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.summary", err);
       }
@@ -186,7 +195,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.ingest", { path: targetPath, source, scope });
         const result = await memoryIngest(args.db, { path: targetPath, source, scope });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.ingest", err);
       }
@@ -206,7 +215,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.prune", { olderThanDays, minAccessCount, scope, dryRun });
         const result = memoryPrune(args.db, { olderThanDays, minAccessCount, scope, dryRun });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.prune", err);
       }
@@ -221,7 +230,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.stats", {});
         const result = memoryStats(args.db, args.dbPath);
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.stats", err);
       }
@@ -242,7 +251,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.graph", { memoryId, query, hops, linkType, limit });
         const result = await memoryGraph(args.db, { memoryId, query, hops, linkType, limit });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.graph", err);
       }
@@ -259,7 +268,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.restore", { id });
         const result = await memoryRestore(args.db, { id });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.restore", err);
       }
@@ -298,7 +307,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
           supersedes,
           contradicts,
         });
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.promote", err);
       }
@@ -313,7 +322,7 @@ export function createEngramServer(args: CreateEngramServerArgs): McpServer {
       try {
         args.sessionTracker.recordActivity("memory.health", {});
         const result = memoryHealth(args.db);
-        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+        return textResponse(JSON.stringify(result, null, 2));
       } catch (err) {
         return errorResponse(args.log, "memory.health", err);
       }
