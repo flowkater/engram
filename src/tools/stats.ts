@@ -19,10 +19,10 @@ export interface StatsResult {
   totalSessions: number;
 }
 
-/**
- * Gather statistics about the memory store.
- */
-export function memoryStats(db: Database.Database, dbPath?: string): StatsResult {
+const STATS_TTL_MS = 30_000;
+let cached: { at: number; value: StatsResult } | null = null;
+
+function computeStats(db: Database.Database, dbPath?: string): StatsResult {
   const total = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE deleted = 0").get() as { c: number }).c;
   const deleted = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE deleted = 1").get() as { c: number }).c;
   const totalCanonical = (db.prepare("SELECT COUNT(*) as c FROM canonical_memories").get() as { c: number }).c;
@@ -84,4 +84,22 @@ export function memoryStats(db: Database.Database, dbPath?: string): StatsResult
     newestMemory,
     totalSessions,
   };
+}
+
+/**
+ * Gather statistics about the memory store.
+ *
+ * Results are cached in-process for 30 seconds to avoid repeated full-scan
+ * GROUP BY aggregates when callers (e.g. Claude) hit memory.stats frequently.
+ * Call `__clearStatsCacheForTest()` to invalidate between tests.
+ */
+export function memoryStats(db: Database.Database, dbPath?: string): StatsResult {
+  if (cached && Date.now() - cached.at < STATS_TTL_MS) return cached.value;
+  const value = computeStats(db, dbPath);
+  cached = { at: Date.now(), value };
+  return value;
+}
+
+export function __clearStatsCacheForTest(): void {
+  cached = null;
 }

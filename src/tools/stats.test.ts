@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
 import { createCanonicalMemory } from "../core/canonical-memory.js";
-import { memoryStats } from "./stats.js";
+import { memoryStats, __clearStatsCacheForTest } from "./stats.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -17,6 +17,7 @@ describe("memory.stats", () => {
   let dbPath: string;
 
   beforeEach(() => {
+    __clearStatsCacheForTest();
     dbPath = tmpDbPath();
     inst = openDatabase(dbPath);
   });
@@ -77,5 +78,53 @@ describe("memory.stats", () => {
     const stats = memoryStats(inst.db);
     expect(stats.totalCanonical).toBe(1);
     expect(stats.byCanonicalKind["fact"]).toBe(1);
+  });
+});
+
+describe("memoryStats — TTL cache", () => {
+  function statsTmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-stats-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  beforeEach(() => {
+    __clearStatsCacheForTest();
+  });
+
+  it("caches stats for 30 seconds (second call does not re-query)", () => {
+    const inst = openDatabase(statsTmpDbPath());
+    try {
+      const origPrepare = inst.db.prepare.bind(inst.db);
+      let prepareCount = 0;
+      (inst.db as any).prepare = (sql: string) => { prepareCount++; return origPrepare(sql); };
+
+      memoryStats(inst.db);
+      const firstCount = prepareCount;
+      expect(firstCount).toBeGreaterThan(0);
+
+      memoryStats(inst.db);
+      // Second call within TTL should not re-prepare
+      expect(prepareCount).toBe(firstCount);
+    } finally {
+      inst.close();
+    }
+  });
+
+  it("exposes __clearStatsCacheForTest to invalidate cache", () => {
+    const inst = openDatabase(statsTmpDbPath());
+    try {
+      const origPrepare = inst.db.prepare.bind(inst.db);
+      let prepareCount = 0;
+      (inst.db as any).prepare = (sql: string) => { prepareCount++; return origPrepare(sql); };
+
+      memoryStats(inst.db);
+      const firstCount = prepareCount;
+
+      __clearStatsCacheForTest();
+
+      memoryStats(inst.db);
+      expect(prepareCount).toBeGreaterThan(firstCount);
+    } finally {
+      inst.close();
+    }
   });
 });
