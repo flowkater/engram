@@ -253,4 +253,49 @@ describe("search score normalization", () => {
     expect(sourceFiltered.some((result) => result.isCanonical)).toBe(false);
     expect(sourceFiltered.some((result) => result.id === raw.id)).toBe(true);
   });
+
+  it("search — single-pass fetch avoids multiplier loop (prepareCount bounded)", async () => {
+    // Seed enough raw memories (>limit*5 and >limit*10) so the OLD multiplier loop
+    // would execute multiple iterations instead of early-exiting on vecRaw.length < fetchLimit.
+    // limit=5 -> fetchLimit = 25, 50, 100 across the 3 iterations.
+    const ids: string[] = [];
+    for (let i = 0; i < 60; i++) {
+      const res = await memoryAdd(inst.db, {
+        content: `seed memory number ${i} with some searchable content alpha beta`,
+        scope: "prep-test",
+      });
+      ids.push(res.id);
+    }
+
+    // Promote a handful into canonical so the canonical path also does real work.
+    for (let i = 0; i < 5; i++) {
+      await memoryPromote(inst.db, {
+        memoryIds: [ids[i]],
+        kind: "fact",
+        title: `Seeded canonical ${i}`,
+        content: `Seeded canonical fact number ${i} searchable content alpha`,
+        scope: "prep-test",
+      });
+    }
+
+    // Spy on db.prepare to count prepared statements during a single search
+    const origPrepare = inst.db.prepare.bind(inst.db);
+    let prepareCount = 0;
+    (inst.db as unknown as { prepare: unknown }).prepare = (sql: string) => {
+      prepareCount++;
+      return origPrepare(sql);
+    };
+
+    try {
+      await memorySearch(inst.db, { query: "searchable content alpha", limit: 5 });
+    } finally {
+      (inst.db as unknown as { prepare: unknown }).prepare = origPrepare;
+    }
+
+    // Old impl with multiplier loop: up to 3 iters * (1 vec + 1 vec-filter + 1 fts + 1 fts-filter)
+    //   per path (canonical + raw) + materialize + access update = 20+
+    // New impl (single-pass JOIN): 1 canonical vec + 1 canonical fts + 1 canonical materialize
+    //   + 1 raw vec + 1 raw fts + 1 raw materialize + 1 raw access update = 7
+    expect(prepareCount).toBeLessThanOrEqual(8);
+  });
 });
