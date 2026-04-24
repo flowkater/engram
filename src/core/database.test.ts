@@ -278,3 +278,31 @@ describe("database pragmas for multi-process safety", () => {
     }
   });
 });
+
+describe("canonical_candidates schema — next_retry_at", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-nextretry-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  it("creates next_retry_at column on fresh DB", () => {
+    const inst = openDatabase(tmpDbPath());
+    try {
+      const cols = inst.db.pragma("table_info(canonical_candidates)") as Array<{ name: string }>;
+      expect(cols.some((c) => c.name === "next_retry_at")).toBe(true);
+    } finally {
+      inst.close();
+    }
+  });
+
+  it("adds next_retry_at index", () => {
+    const inst = openDatabase(tmpDbPath());
+    try {
+      const idx = inst.db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_canonical_candidates_queue_backoff'"
+      ).get();
+      expect(idx).toBeDefined();
+    } finally {
+      inst.close();
+    }
+  });
+});

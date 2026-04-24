@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS canonical_candidates (
   retry_count INTEGER NOT NULL DEFAULT 0,
   last_judged_at TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  next_retry_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_canonical_candidates_queue
 ON canonical_candidates(status, priority_score DESC, created_at DESC);
@@ -158,6 +159,8 @@ CREATE INDEX IF NOT EXISTS idx_canonical_candidates_raw_scope_status
 ON canonical_candidates(raw_memory_id, scope, status);
 CREATE INDEX IF NOT EXISTS idx_canonical_candidates_raw_scope_fingerprint
 ON canonical_candidates(raw_memory_id, scope, content_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_canonical_candidates_queue_backoff
+ON canonical_candidates(status, next_retry_at);
 `;
 
 /** Initialize the vector virtual table (sqlite-vec). */
@@ -354,6 +357,16 @@ export function openDatabase(
       if (!cols.some((c) => c.name === "embed_model")) {
         db.exec("ALTER TABLE memories ADD COLUMN embed_model TEXT");
       }
+
+      // Migration: add next_retry_at to canonical_candidates (Task 1.2).
+      const candidateCols = db.pragma("table_info(canonical_candidates)") as Array<{ name: string }>;
+      if (!candidateCols.some((c) => c.name === "next_retry_at")) {
+        db.exec("ALTER TABLE canonical_candidates ADD COLUMN next_retry_at TEXT");
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_canonical_candidates_queue_backoff
+        ON canonical_candidates(status, next_retry_at)
+      `);
 
       if (opts?.runMaintenance !== false) {
         runDatabaseMaintenance(db);
