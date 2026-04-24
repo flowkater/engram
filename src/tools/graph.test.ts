@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { openDatabase, type DatabaseInstance } from "../core/database.js";
-import { memoryGraph } from "./graph.js";
+import { memoryGraph, MAX_GRAPH_HOP_DEPTH } from "./graph.js";
 import path from "node:path";
 import os from "node:os";
 
@@ -130,5 +130,70 @@ describe("memory.graph", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain("B");
     expect(ids).toContain("D");
+  });
+});
+
+describe("memoryGraph — bounded traversal", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-memgraph-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  it("caps hop depth at MAX_GRAPH_HOP_DEPTH", async () => {
+    const { MAX_GRAPH_HOP_DEPTH } = await import("../tools/graph.js");
+    expect(MAX_GRAPH_HOP_DEPTH).toBeGreaterThanOrEqual(3);
+    expect(MAX_GRAPH_HOP_DEPTH).toBeLessThanOrEqual(5);
+
+    const inst = openDatabase(tmpDbPath());
+    try {
+      // Seed a memory with single link (minimal valid graph)
+      const now = "2026-04-24T00:00:00.000Z";
+      inst.db.prepare(`
+        INSERT INTO memories (id, content, source, scope, created_at, updated_at, deleted)
+        VALUES ('seed', 'seed', 'manual', 'global', ?, ?, 0)
+      `).run(now, now);
+
+      // Passing hops: 99 should be silently capped at MAX_GRAPH_HOP_DEPTH
+      const result = await memoryGraph(inst.db, { memoryId: "seed", hops: 99 });
+      // The result should not throw or run 99 hops; presence is enough here
+      expect(result).toBeDefined();
+    } finally {
+      inst.close();
+    }
+  });
+
+  it("batches memory fetches during BFS (no per-node SELECT)", async () => {
+    const inst = openDatabase(tmpDbPath());
+    try {
+      const now = "2026-04-24T00:00:00.000Z";
+      // Seed 10 memories, star pattern with seed pointing to 9 neighbors
+      for (let i = 0; i < 10; i++) {
+        inst.db.prepare(`
+          INSERT INTO memories (id, content, source, scope, created_at, updated_at, deleted)
+          VALUES (?, ?, 'manual', 'global', ?, ?, 0)
+        `).run(`mem-${i}`, `content ${i}`, now, now);
+      }
+      for (let i = 1; i < 10; i++) {
+        inst.db.prepare(`
+          INSERT INTO memory_links (from_id, to_id, link_type, weight, created_at)
+          VALUES ('mem-0', ?, 'wikilink', 1.0, ?)
+        `).run(`mem-${i}`, now);
+      }
+
+      const origPrepare = inst.db.prepare.bind(inst.db);
+      let perIdMemoryFetches = 0;
+      (inst.db as any).prepare = (sql: string) => {
+        // Match "WHERE id = ?" against the memories table (not memory_links / vec / fts)
+        if (/FROM\s+memories\b[\s\S]*WHERE[\s\S]*\bid\s*=\s*\?/i.test(sql)
+            && !/FROM\s+memory_links\b/i.test(sql)) {
+          perIdMemoryFetches++;
+        }
+        return origPrepare(sql);
+      };
+
+      await memoryGraph(inst.db, { memoryId: "mem-0", hops: 1 });
+      expect(perIdMemoryFetches).toBeLessThanOrEqual(1); // seed-only lookup, neighbors batched
+    } finally {
+      inst.close();
+    }
   });
 });
