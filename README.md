@@ -211,6 +211,7 @@ Only one Engram process should run startup `diffScan`, watcher, scheduler, and c
 | `ENGRAM_BACKGROUND_LEASE_TTL_MS` | `60000`         | Background worker lease TTL; mainly for tests |
 | `ENGRAM_BACKGROUND_RENEW_MS` | `20000`            | Background worker renew cadence; mainly for tests |
 | `ENGRAM_BACKGROUND_RETRY_MS` | `5000`             | Follower retry cadence for background takeover |
+| `ENGRAM_CPU_WATCHDOG_MS` | `0` (disabled)           | If positive (e.g. `1000`), engram monitors its own event loop and logs a warning when turnaround exceeds this threshold. Use when diagnosing CPU hot loops or stuck handlers. |
 
 ## Development
 

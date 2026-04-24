@@ -8,6 +8,7 @@ import { resolveBackgroundTiming, startBackgroundWorker, type BackgroundWorkerIn
 import { startBackgroundJobs } from "./background-jobs.js";
 import { resolveBackgroundRuntime } from "./background-runtime.js";
 import { createEngramServer, type SessionTrackerLike } from "./server-app.js";
+import { startEventLoopWatchdog } from "./self-watchdog.js";
 
 export interface ServerLike {
   connect(transport: unknown): Promise<void>;
@@ -149,6 +150,15 @@ export async function startServerBootstrap(
     });
   } else {
     log("Background jobs disabled by environment");
+  }
+
+  const watchdogThreshold = parseInt(env.ENGRAM_CPU_WATCHDOG_MS || "0", 10);
+  if (watchdogThreshold > 0) {
+    startEventLoopWatchdog({
+      thresholdMs: watchdogThreshold,
+      onLag: (lag) => log(`[watchdog] Event loop lag ${lag}ms (threshold ${watchdogThreshold}ms)`),
+    });
+    log(`Event loop watchdog enabled (threshold ${watchdogThreshold}ms)`);
   }
 
   let shutdownOnce = false;
