@@ -20,7 +20,7 @@ export interface StatsResult {
 }
 
 const STATS_TTL_MS = 30_000;
-let cached: { at: number; value: StatsResult } | null = null;
+let cached: { db: Database.Database; at: number; value: StatsResult } | null = null;
 
 function computeStats(db: Database.Database, dbPath?: string): StatsResult {
   const total = (db.prepare("SELECT COUNT(*) as c FROM memories WHERE deleted = 0").get() as { c: number }).c;
@@ -94,9 +94,9 @@ function computeStats(db: Database.Database, dbPath?: string): StatsResult {
  * Call `__clearStatsCacheForTest()` to invalidate between tests.
  */
 export function memoryStats(db: Database.Database, dbPath?: string): StatsResult {
-  if (cached && Date.now() - cached.at < STATS_TTL_MS) return cached.value;
+  if (cached && cached.db === db && Date.now() - cached.at < STATS_TTL_MS) return cached.value;
   const value = computeStats(db, dbPath);
-  cached = { at: Date.now(), value };
+  cached = { db, at: Date.now(), value };
   return value;
 }
 

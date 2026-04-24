@@ -127,4 +127,29 @@ describe("memoryStats — TTL cache", () => {
       inst.close();
     }
   });
+
+  it("does not return cached value for a different db instance", () => {
+    const instA = openDatabase(tmpDbPath());
+    const instB = openDatabase(tmpDbPath());
+    try {
+      const origPrepareA = instA.db.prepare.bind(instA.db);
+      let preparesA = 0;
+      (instA.db as any).prepare = (sql: string) => { preparesA++; return origPrepareA(sql); };
+
+      const origPrepareB = instB.db.prepare.bind(instB.db);
+      let preparesB = 0;
+      (instB.db as any).prepare = (sql: string) => { preparesB++; return origPrepareB(sql); };
+
+      memoryStats(instA.db);
+      const firstA = preparesA;
+      expect(firstA).toBeGreaterThan(0);
+
+      // Different db — must recompute, not reuse instA's cache
+      memoryStats(instB.db);
+      expect(preparesB).toBeGreaterThan(0);
+    } finally {
+      instA.close();
+      instB.close();
+    }
+  });
 });
