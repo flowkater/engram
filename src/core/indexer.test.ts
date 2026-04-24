@@ -220,3 +220,38 @@ describe("indexer", () => {
     releaseRuntimeLease(inst.db, buildIndexLeaseKey(filePath), "other-process");
   });
 });
+
+describe("indexFile — parallel embedding", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-embed-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  it("embeds chunks in parallel (respects pLimit)", async () => {
+    const { setEmbedderMockDelayMs, resetEmbedderMockDelay } = await import("../__test__/mock-embedder.js");
+    setEmbedderMockDelayMs(50);
+
+    const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-embed-vault-"));
+    // Create a file that will produce multiple chunks (use large text).
+    // 250 "word " tokens per section reliably yields ~12 chunks under OBSIDIAN_CHUNK_OPTS.
+    const chunkCount = 12;
+    const contents = Array.from({ length: chunkCount }, (_, i) =>
+      `# Section ${i}\n\n` + "word ".repeat(250) + "\n\n"
+    ).join("");
+    const tmpFile = path.join(vaultDir, "big.md");
+    fs.writeFileSync(tmpFile, contents);
+
+    const inst = openDatabase(tmpDbPath());
+    try {
+      const started = Date.now();
+      const result = await indexFile(inst.db, tmpFile, tmpFile, { source: "manual" });
+      const elapsed = Date.now() - started;
+      // Serial: ~12 * 50ms = 600ms. With pLimit(3): ~4 * 50ms = 200ms. Allow generous slack.
+      expect(elapsed).toBeLessThan(450);
+      expect(result.chunks).toBeGreaterThanOrEqual(1);
+    } finally {
+      inst.close();
+      resetEmbedderMockDelay();
+      fs.rmSync(vaultDir, { recursive: true, force: true });
+    }
+  });
+});

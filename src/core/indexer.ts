@@ -148,16 +148,21 @@ export async function indexFile(
 
     // Pre-compute embeddings outside transaction (network I/O)
     // Skip chunks that fail embedding (e.g. Ollama YAML parse errors on certain content)
-    const embedResults: (EmbedResult | null)[] = [];
-    for (const chunk of chunks) {
-      try {
-        const result = await embed(chunk.text, opts.embedOpts, true);
-        embedResults.push(result);
-      } catch (err) {
-        console.warn(`[indexer] Skipping chunk ${chunk.index} of ${relativePath}: ${(err as Error).message}`);
-        embedResults.push(null);
-      }
-    }
+    // Parallel embedding with pLimit(3) — large files (100+ chunks) would otherwise take 100× the latency.
+    // Bound at 3 to match global Ollama concurrency tuning (see watcher.ts indexSemaphore + diffScan BATCH).
+    const embedLimit = pLimit(3);
+    const embedResults: (EmbedResult | null)[] = await Promise.all(
+      chunks.map((chunk) =>
+        embedLimit(async () => {
+          try {
+            return await embed(chunk.text, opts.embedOpts, true);
+          } catch (err) {
+            console.warn(`[indexer] Skipping chunk ${chunk.index} of ${relativePath}: ${(err as Error).message}`);
+            return null;
+          }
+        })
+      )
+    );
 
     // Atomic insert of all chunks (skip failed embeddings)
     db.transaction(() => {

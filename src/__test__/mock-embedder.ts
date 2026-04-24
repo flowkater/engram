@@ -3,6 +3,23 @@
  * Usage: vi.mock("./embedder.js", () => createMockEmbedder());
  */
 
+let mockDelayMs = 0;
+
+/**
+ * Set an artificial delay (ms) for every mock embed call.
+ * Used by tests that need to observe parallelism vs serial timing.
+ */
+export function setEmbedderMockDelayMs(ms: number): void {
+  mockDelayMs = ms;
+}
+
+/**
+ * Reset the artificial delay back to 0.
+ */
+export function resetEmbedderMockDelay(): void {
+  mockDelayMs = 0;
+}
+
 export function fakeEmbed(text: string): Promise<Float32Array> {
   const vec = new Float32Array(768);
   for (let i = 0; i < Math.min(text.length, 768); i++) {
@@ -17,10 +34,13 @@ export function fakeEmbed(text: string): Promise<Float32Array> {
 
 export function createMockEmbedder(modelName = "test-model") {
   return {
-    embed: (text: string, _opts?: unknown, withModel?: boolean) => {
-      const p = fakeEmbed(text);
-      if (withModel) return p.then((embedding: Float32Array) => ({ embedding, model: modelName }));
-      return p;
+    embed: async (text: string, _opts?: unknown, withModel?: boolean) => {
+      if (mockDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, mockDelayMs));
+      }
+      const embedding = await fakeEmbed(text);
+      if (withModel) return { embedding, model: modelName };
+      return embedding;
     },
     EMBEDDING_DIM: 768,
     getCurrentModelName: () => modelName,
