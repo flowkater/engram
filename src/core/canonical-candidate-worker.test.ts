@@ -382,3 +382,39 @@ describe("canonical candidate worker", () => {
     await worker.stop();
   });
 });
+
+describe("canonical-candidate-worker idle backoff", () => {
+  function tmpDbPath(): string {
+    return path.join(os.tmpdir(), `engram-idle-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  }
+
+  it("exposes default poll and idle constants with safe values", async () => {
+    const { DEFAULT_CANDIDATE_WORKER_POLL_MS, DEFAULT_CANDIDATE_WORKER_IDLE_MS } = await import("./canonical-candidate-worker.js");
+    expect(DEFAULT_CANDIDATE_WORKER_POLL_MS).toBeGreaterThanOrEqual(2000);
+    expect(DEFAULT_CANDIDATE_WORKER_IDLE_MS).toBeGreaterThanOrEqual(5000);
+  });
+
+  it("does not invoke judge when queue is empty (idle path)", async () => {
+    const inst = openDatabase(tmpDbPath());
+    try {
+      const { startCanonicalCandidateWorker } = await import("./canonical-candidate-worker.js");
+      let judgeCalls = 0;
+      const judge = vi.fn(async () => {
+        judgeCalls++;
+        return { action: "approve" as const, canonicalKind: "fact" as const, title: "t", content: "c", confidence: 0.9, rationale: "" };
+      });
+      const worker = startCanonicalCandidateWorker(inst.db, {
+        pollMs: 50,
+        idleMs: 200,
+        judgeCandidate: judge,
+        embedCanonical: async () => new Float32Array(768),
+      });
+      // No candidates exist. Wait ~300ms. Judge should not be called at all.
+      await new Promise((r) => setTimeout(r, 300));
+      await worker.stop();
+      expect(judgeCalls).toBe(0);
+    } finally {
+      inst.close();
+    }
+  });
+});

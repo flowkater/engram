@@ -20,6 +20,7 @@ import {
 
 export interface CanonicalCandidateWorkerOptions {
   pollMs?: number;
+  idleMs?: number;
   nearbyLimit?: number;
   judgeCandidate?: (
     candidate: JudgeCandidateInput,
@@ -43,7 +44,8 @@ export interface CanonicalCandidateWorkerInstance {
   stop(): Promise<void>;
 }
 
-const DEFAULT_POLL_MS = 250;
+export const DEFAULT_CANDIDATE_WORKER_POLL_MS = 2000;
+export const DEFAULT_CANDIDATE_WORKER_IDLE_MS = 10_000;
 const DEFAULT_NEARBY_LIMIT = 10;
 
 function touchProcessingLease(db: Database.Database, candidateId: string, now: string): void {
@@ -93,7 +95,8 @@ export function startCanonicalCandidateWorker(
   db: Database.Database,
   opts?: CanonicalCandidateWorkerOptions
 ): CanonicalCandidateWorkerInstance {
-  const pollMs = opts?.pollMs ?? DEFAULT_POLL_MS;
+  const pollMs = opts?.pollMs ?? DEFAULT_CANDIDATE_WORKER_POLL_MS;
+  const idleMs = opts?.idleMs ?? DEFAULT_CANDIDATE_WORKER_IDLE_MS;
   const nearbyLimit = opts?.nearbyLimit ?? DEFAULT_NEARBY_LIMIT;
   const judgeCandidate = opts?.judgeCandidate ?? judgeCanonicalCandidate;
   const embedCanonical = opts?.embedCanonical ?? ((text: string) => embed(text));
@@ -222,11 +225,13 @@ export function startCanonicalCandidateWorker(
   async function runOnce(): Promise<void> {
     if (stopped || activeRun) return;
 
+    let foundCandidate = false;
     activeRun = (async () => {
       const currentNow = now();
       reclaimStaleProcessingCandidates(db, { limit: 10 }, currentNow);
       const candidate = listQueuedCanonicalCandidates(db, 1, currentNow)[0];
       if (candidate) {
+        foundCandidate = true;
         await processCandidate(candidate);
       }
     })();
@@ -235,7 +240,7 @@ export function startCanonicalCandidateWorker(
       await activeRun;
     } finally {
       activeRun = null;
-      scheduleNext();
+      scheduleNext(foundCandidate ? pollMs : idleMs);
     }
   }
 
