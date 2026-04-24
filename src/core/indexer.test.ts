@@ -228,7 +228,7 @@ describe("indexFile — parallel embedding", () => {
 
   it("embeds chunks in parallel (respects pLimit)", async () => {
     const { setEmbedderMockDelayMs, resetEmbedderMockDelay } = await import("../__test__/mock-embedder.js");
-    setEmbedderMockDelayMs(50);
+    setEmbedderMockDelayMs(100);
 
     const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "engram-embed-vault-"));
     // Create a file that will produce multiple chunks (use large text).
@@ -245,9 +245,9 @@ describe("indexFile — parallel embedding", () => {
       const started = Date.now();
       const result = await indexFile(inst.db, tmpFile, tmpFile, { source: "manual" });
       const elapsed = Date.now() - started;
-      // Serial: ~12 * 50ms = 600ms. With pLimit(3): ~4 * 50ms = 200ms. Allow generous slack.
-      expect(elapsed).toBeLessThan(450);
-      expect(result.chunks).toBeGreaterThanOrEqual(1);
+      // Serial: ~12 * 100ms = 1200ms. pLimit(3): ~4 * 100ms = 400ms. 700ms allows CI jitter.
+      expect(elapsed).toBeLessThan(700);
+      expect(result.chunks).toBeGreaterThanOrEqual(8);
     } finally {
       inst.close();
       resetEmbedderMockDelay();
